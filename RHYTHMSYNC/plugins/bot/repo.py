@@ -42,7 +42,7 @@ async def show_repo(_, msg):
     try:
         await send_photo_colored(
             chat_id=msg.chat.id,
-            photo="https://files.catbox.moe/a6sz5r.jpg",
+            photo="https://i.imgur.com/I3paaU9.jpeg",
             caption=repo_caption,
             reply_markup=buttons,
         )
