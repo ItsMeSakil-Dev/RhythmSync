@@ -75,7 +75,7 @@ async def upscale_image(_, message: Message):
         await status.edit(f"⚠️ Error: `{str(e)}`")
 
 
-@app.on_message(filters.command("getdraw"))
+@app.on_message(filters.command(["getdraw", "image"]))
 async def draw_image(_, message: Message):
     if not DEEP_API:
         return await message.reply_text("🚫 DeepAI API key is missing.")
