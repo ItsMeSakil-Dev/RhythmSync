@@ -41,6 +41,32 @@ async def post_data(url: str, data: dict, headers: dict):
             return await resp.json()
 
 
+def extract_image_url(resp: dict):
+    """
+    DeepAI responses can come back in two shapes depending on the
+    endpoint/version:
+      1) {"output_url": "https://..."}
+      2) {"image_url": {"url": "https://..."}}  (nested S3 url)
+    This helper safely pulls the actual URL out of either shape.
+    """
+    if not resp:
+        return None
+
+    # Shape 1 — flat key
+    url = resp.get("output_url")
+    if url:
+        return url
+
+    # Shape 2 — nested dict
+    nested = resp.get("image_url")
+    if isinstance(nested, dict):
+        return nested.get("url")
+    if isinstance(nested, str):
+        return nested
+
+    return None
+
+
 @app.on_message(filters.command("upscale"))
 async def upscale_image(_, message: Message):
     if not DEEP_API:
@@ -60,9 +86,9 @@ async def upscale_image(_, message: Message):
             headers={'api-key': DEEP_API}
         )
 
-        image_url = resp.get("output_url")
+        image_url = extract_image_url(resp)
         if not image_url:
-            return await status.edit("❌ Upscale request failed.")
+            return await status.edit(f"❌ Upscale request failed.\n`{resp}`")
 
         final_path = await download_from_url(local_path, image_url)
         if not final_path:
@@ -104,9 +130,9 @@ async def draw_image(_, message: Message):
             headers={'api-key': DEEP_API}
         )
 
-        image_url = resp.get("output_url")
+        image_url = extract_image_url(resp)
         if not image_url:
-            return await status.edit("❌ Failed to generate image.")
+            return await status.edit(f"❌ Failed to generate image.\n`{resp}`")
 
         final_path = await download_from_url(temp_path, image_url)
         if not final_path:
@@ -117,8 +143,3 @@ async def draw_image(_, message: Message):
 
     except Exception as e:
         await status.edit(f"⚠️ Error: `{str(e)}`")
-
-# ═══════════════════════════════════════════════════════════
-#         🌺 RhythmSync 🌺
-#   github.com/SunloMusicOfficial/RhythmSync
-# ═══════════════════════════════════════════════════════════
