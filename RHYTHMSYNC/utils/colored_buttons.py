@@ -629,14 +629,7 @@ async def smart_send_media(
         logger.warning(f"smart_send_media {method}: Pyrogram fallback failed: {e}")
         return None
 
-
 async def smart_edit_message_text(
-    chat_id: Union[int, str],
-    message_id: int,
-    text: str,
-    reply
-   
-   async def smart_edit_message_text(
     chat_id: Union[int, str],
     message_id: int,
     text: str,
@@ -644,18 +637,10 @@ async def smart_edit_message_text(
     parse_mode: str = "HTML",
     disable_web_page_preview: bool = False,
 ):
-    """Edit a message (text OR photo caption) with colored buttons preserved.
-
-    Order of attempts (all keep 'style' field, so colors survive on tap):
-      1. Bot API editMessageText  — succeeds if original message was TEXT
-      2. Bot API editMessageCaption — succeeds if original message was PHOTO
-      3. Pyrogram edit_message_text — last-resort fallback (colors lost)
-      4. Pyrogram edit_message_caption — last-resort fallback (colors lost)
-    """
+    """Edit a message (text OR photo caption) with colored buttons preserved."""
     from RHYTHMSYNC import app
     from pyrogram import enums
 
-    # 1. Try editMessageText via Bot API (colored)
     try:
         data = await edit_message_text_colored(
             chat_id=chat_id,
@@ -670,8 +655,6 @@ async def smart_edit_message_text(
     except Exception as e:
         logger.debug(f"smart_edit_message_text: editMessageText failed: {e}")
 
-    # 2. If message is a photo, editMessageText fails ("no text to edit").
-    #    Try editMessageCaption which supports colored buttons too.
     try:
         data = await edit_message_caption_colored(
             chat_id=chat_id,
@@ -685,7 +668,6 @@ async def smart_edit_message_text(
     except Exception as e:
         logger.debug(f"smart_edit_message_text: editMessageCaption fallback failed: {e}")
 
-    # 3. Pyrogram text edit (no colors)
     try:
         return await app.edit_message_text(
             chat_id=chat_id,
@@ -698,7 +680,6 @@ async def smart_edit_message_text(
     except Exception as e:
         logger.debug(f"smart_edit_message_text: Pyrogram text edit failed: {e}")
 
-    # 4. Pyrogram caption edit (no colors) — final fallback
     try:
         return await app.edit_message_caption(
             chat_id=chat_id,
@@ -717,10 +698,7 @@ async def smart_edit_reply_markup(
     message_id: int,
     reply_markup: List[List[Dict]],
 ):
-    """Edit ONLY the buttons of a message with colors preserved.
-
-    Bot API editMessageReplyMarkup keeps 'style' field. Pyrogram fallback loses colors.
-    """
+    """Edit ONLY the buttons of a message with colors preserved."""
     from RHYTHMSYNC import app
 
     try:
@@ -752,15 +730,10 @@ async def smart_edit_message_caption(
     reply_markup: Optional[List[List[Dict]]] = None,
     parse_mode: str = "HTML",
 ):
-    """Edit caption OR text message with colored buttons preserved.
-
-    Order: editMessageCaption -> editMessageText (both via Bot API to keep colors)
-    -> Pyrogram fallbacks (colors lost).
-    """
+    """Edit caption OR text message with colored buttons preserved."""
     from RHYTHMSYNC import app
     from pyrogram import enums
 
-    # 1. editMessageCaption (photo case)
     try:
         data = await edit_message_caption_colored(
             chat_id=chat_id,
@@ -774,7 +747,6 @@ async def smart_edit_message_caption(
     except Exception as e:
         logger.debug(f"smart_edit_message_caption: editMessageCaption failed: {e}")
 
-    # 2. editMessageText (text case)
     try:
         data = await edit_message_text_colored(
             chat_id=chat_id,
@@ -788,7 +760,6 @@ async def smart_edit_message_caption(
     except Exception as e:
         logger.debug(f"smart_edit_message_caption: editMessageText fallback failed: {e}")
 
-    # 3. Pyrogram caption fallback (no colors)
     try:
         return await app.edit_message_caption(
             chat_id=chat_id,
@@ -800,7 +771,6 @@ async def smart_edit_message_caption(
     except Exception as e:
         logger.debug(f"smart_edit_message_caption: Pyrogram caption failed: {e}")
 
-    # 4. Pyrogram text fallback
     try:
         return await app.edit_message_text(
             chat_id=chat_id,
@@ -812,9 +782,3 @@ async def smart_edit_message_caption(
     except Exception as e:
         logger.warning(f"smart_edit_message_caption: all 4 paths failed: {e}")
         return None
-
-# ═══════════════════════════════════════════════════════════
-#         🌺 RhythmSync 🌺
-#   github.com/SunloMusicOfficial/RhythmSync
-# ═══════════════════════════════════════════════════════════
-
