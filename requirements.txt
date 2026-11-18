@@ -9,6 +9,7 @@ gunicorn
 edge-tts
 ffmpeg-python
 future
+heroku3
 gitpython
 google-api-python-client
 gpytranslate
