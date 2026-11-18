@@ -11,19 +11,24 @@ from pathlib import Path
 from typing import Optional
 
 import aiohttp
-from aiohttp import client_exceptions
+
 
 class UnableToFetchCarbon(Exception):
     pass
 
+
+# Sirf woh names jo carbonara actually support karta hai.
+# "dracula-pro" aur "parasio-dark" hata diye — ye HTTP 400 dete the.
 themes = [
     "3024-night", "a11y-dark", "blackboard", "base16-dark", "base16-light",
-    "cobalt", "duotone-dark", "dracula-pro", "hopscotch", "lucario",
-    "material", "monokai", "nightowl", "nord", "oceanic-next", "one-light",
-    "one-dark", "panda-syntax", "parasio-dark", "seti", "shades-of-purple",
-    "solarized+dark", "solarized+light", "synthwave-84", "twilight",
-    "verminal", "vscode", "yeti", "zenburn",
+    "cobalt", "duotone-dark", "hopscotch", "lucario", "material", "monokai",
+    "night-owl", "nord", "oceanic-next", "one-light", "one-dark", "panda-syntax",
+    "paraiso-dark", "seti", "shades-of-purple", "solarized-dark", "solarized-light",
+    "synthwave-84", "twilight", "verminal", "vscode", "yeti", "zenburn",
 ]
+
+# Fallback pool — agar random theme reject ho jaye to inme se pakka chalega.
+SAFE_THEMES = ["seti", "blackboard", "cobalt", "monokai", "nord", "twilight"]
 
 colour = [
     "#FF0000", "#FF5733", "#FFFF00", "#008000", "#0000FF", "#800080", "#A52A2A",
@@ -31,8 +36,17 @@ colour = [
     "#008080", "#4B0082", "#EE82EE", "#FFC0CB", "#000000", "#FFFFFF", "#808080",
 ]
 
+# Primary + mirror endpoint.
+ENDPOINTS = [
+    "https://carbonara.solopov.dev/api/cook",
+    "https://carbonara-42.vercel.app/api/cook",
+]
+
+PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+
+
 class CarbonAPI:
-    def __init__(self, cache_dir: str = "cache", timeout_s: int = 20):
+    def __init__(self, cache_dir: str = "cache", timeout_s: int = 25):
         self.language = "auto"
         self.drop_shadow = True
         self.drop_shadow_blur = "68px"
@@ -68,43 +82,45 @@ class CarbonAPI:
         if len(text) > 10000:
             raise UnableToFetchCarbon("Text too long (max 10k characters).")
 
-        params = {
-            "code": text,
-            "backgroundColor": random.choice(colour),
-            "theme": random.choice(themes),
-            "dropShadow": self.drop_shadow,
-            "dropShadowOffsetY": self.drop_shadow_offset,
-            "dropShadowBlurRadius": self.drop_shadow_blur,
-            "fontFamily": self.font_family,
-            "language": self.language,
-            "watermark": self.watermark,
-            "widthAdjustment": self.width_adjustment,
-        }
-
-        url = "https://carbonara.solopov.dev/api/cook"
         session = await self._session_get()
+        errors = []
 
+        # 3 attempts: pehla random theme, baaki pakke SAFE_THEMES se.
+        for attempt in range(3):
+            pool = themes if attempt == 0 else SAFE_THEMES
+            params = {
+                "code": text,
+                "backgroundColor": random.choice(colour),
+                "theme": random.choice(pool),
+                "dropShadow": self.drop_shadow,
+                "dropShadowOffsetY": self.drop_shadow_offset,
+                "dropShadowBlurRadius": self.drop_shadow_blur,
+                "fontFamily": self.font_family,
+                "language": self.language,
+                "watermark": self.watermark,
+                "widthAdjustment": self.width_adjustment,
+            }
+            url = ENDPOINTS[attempt % len(ENDPOINTS)]
 
-        last_exc = None
-        for _ in range(2):
             try:
                 async with session.post(url, json=params) as resp:
-                    if resp.status != 200:
-                        body = await resp.text()
-                        raise UnableToFetchCarbon(f"Carbon API error {resp.status}: {body[:200]}")
                     data = await resp.read()
 
-                    filename = f"carbon_{user_id}_{int(time.time()*1000)}.jpg"
-                    out = self.cache_dir / filename
-                    out.write_bytes(data)
-                    return str(out.resolve())
-            except client_exceptions.ClientConnectorError as e:
-                last_exc = e
-            except asyncio.TimeoutError as e:
-                last_exc = e
-        raise UnableToFetchCarbon(f"Network error: {last_exc!r}")
+                    if resp.status != 200:
+                        errors.append(f"{url} -> HTTP {resp.status}: {data[:120]!r}")
+                    elif not data.startswith(PNG_MAGIC):
+                        # 200 mila par body image nahi hai (rate-limit page etc.)
+                        errors.append(f"{url} -> non-PNG body: {data[:120]!r}")
+                    else:
+                        filename = f"carbon_{user_id}_{int(time.time() * 1000)}.png"
+                        out = self.cache_dir / filename
+                        out.write_bytes(data)
+                        return str(out.resolve())
 
-# ═══════════════════════════════════════════════════════════
-#         🌺 RhythmSync 🌺
-#   github.com/SunloMusicOfficial/RhythmSync
-# ═══════════════════════════════════════════════════════════
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                errors.append(f"{url} -> {e!r}")
+
+            if attempt < 2:
+                await asyncio.sleep(1.5 * (attempt + 1))
+
+        raise UnableToFetchCarbon("All attempts failed: " + " | ".join(errors))
