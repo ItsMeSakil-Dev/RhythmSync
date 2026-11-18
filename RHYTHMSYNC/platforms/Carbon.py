@@ -4,123 +4,261 @@
 #   Dᴇᴠʟᴏᴘᴇʀ : @YO_UR_OFFICIAL_CRUSH | Telegram
 # ═══════════════════════════════════════════════════════════
 
-import random
 import asyncio
+import random
 import time
+import urllib.request
 from pathlib import Path
-from typing import Optional
+from typing import List, Tuple
 
-import aiohttp
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from pygments.lexers import get_lexer_by_name, guess_lexer
+from pygments.styles import get_style_by_name
+from pygments.token import Token
+from pygments.util import ClassNotFound
 
 
 class UnableToFetchCarbon(Exception):
     pass
 
 
-# Sirf woh names jo carbonara actually support karta hai.
-# "dracula-pro" aur "parasio-dark" hata diye — ye HTTP 400 dete the.
+# Pygments style names — inhi ko theme maan lo.
 themes = [
-    "3024-night", "a11y-dark", "blackboard", "base16-dark", "base16-light",
-    "cobalt", "duotone-dark", "hopscotch", "lucario", "material", "monokai",
-    "night-owl", "nord", "oceanic-next", "one-light", "one-dark", "panda-syntax",
-    "paraiso-dark", "seti", "shades-of-purple", "solarized-dark", "solarized-light",
-    "synthwave-84", "twilight", "verminal", "vscode", "yeti", "zenburn",
+    "monokai", "dracula", "nord", "one-dark", "material", "paraiso-dark",
+    "solarized-dark", "solarized-light", "zenburn", "gruvbox-dark", "native",
+    "vim", "friendly", "xcode", "rainbow_dash", "inkpot", "tango", "fruity",
 ]
 
-# Fallback pool — agar random theme reject ho jaye to inme se pakka chalega.
-SAFE_THEMES = ["seti", "blackboard", "cobalt", "monokai", "nord", "twilight"]
+FALLBACK_STYLE = "monokai"
 
-colour = [
-    "#FF0000", "#FF5733", "#FFFF00", "#008000", "#0000FF", "#800080", "#A52A2A",
-    "#FF00FF", "#D2B48C", "#00FFFF", "#808000", "#800000", "#30D5C8", "#00FF00",
-    "#008080", "#4B0082", "#EE82EE", "#FFC0CB", "#000000", "#FFFFFF", "#808080",
+# Font dhundhne ke liye common paths (Render/Ubuntu/Debian)
+FONT_CANDIDATES = [
+    Path("fonts/JetBrainsMono-Regular.ttf"),
+    Path("RHYTHMSYNC/assets/fonts/JetBrainsMono-Regular.ttf"),
+    Path("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"),
+    Path("/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf"),
+    Path("/usr/share/fonts/truetype/ubuntu/UbuntuMono-R.ttf"),
 ]
 
-# Primary + mirror endpoint.
-ENDPOINTS = [
-    "https://carbonara.solopov.dev/api/cook",
-    "https://carbonara-42.vercel.app/api/cook",
-]
+FONT_URL = (
+    "https://github.com/JetBrains/JetBrainsMono/raw/master/fonts/ttf/"
+    "JetBrainsMono-Regular.ttf"
+)
 
-PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+_probe = ImageDraw.Draw(Image.new("RGB", (1, 1)))
 
+
+# ─────────────────────────── helpers ───────────────────────────
+
+def _hex(value: str, default: str = "#ffffff") -> str:
+    if not value:
+        return default
+    return value if value.startswith("#") else "#" + value
+
+
+def _get_style(name: str):
+    try:
+        return get_style_by_name(name)
+    except ClassNotFound:
+        return get_style_by_name(FALLBACK_STYLE)
+
+
+def _load_font(size: int) -> ImageFont.FreeTypeFont:
+    for path in FONT_CANDIDATES:
+        if path.exists():
+            try:
+                return ImageFont.truetype(str(path), size)
+            except OSError:
+                continue
+    # Aakhri koshish: default bitmap font (chhota par kaam chalau)
+    return ImageFont.load_default()
+
+
+def _ensure_font(cache_dir: Path) -> None:
+    """Agar koi TTF nahi mila to ek baar JetBrains Mono download karo."""
+    if any(p.exists() for p in FONT_CANDIDATES):
+        return
+    target = cache_dir / "JetBrainsMono-Regular.ttf"
+    if target.exists():
+        FONT_CANDIDATES.insert(0, target)
+        return
+    try:
+        with urllib.request.urlopen(FONT_URL, timeout=10) as resp:
+            target.write_bytes(resp.read())
+        FONT_CANDIDATES.insert(0, target)
+    except Exception:
+        pass  # offline — default font se kaam chal jayega
+
+
+def _tokenize(code: str, language: str):
+    try:
+        lexer = (
+            get_lexer_by_name(language)
+            if language and language != "auto"
+            else guess_lexer(code)
+        )
+    except ClassNotFound:
+        lexer = get_lexer_by_name("text")
+    return list(lexer.get_tokens(code))
+
+
+def _to_lines(tokens, style) -> List[List[Tuple[str, str]]]:
+    """Tokens ko [(text, color)] ki lines me todo — newlines preserve karte hue."""
+    lines: List[List[Tuple[str, str]]] = [[]]
+    for ttype, value in tokens:
+        color = _hex(style.style_for_token(ttype).get("color"))
+        for i, part in enumerate(value.split("\n")):
+            if i > 0:
+                lines.append([])
+            if part:
+                lines[-1].append((part, color))
+
+    while lines and not lines[-1]:  # trailing blank lines hatao
+        lines.pop()
+    return lines or [[("", "#ffffff")]]
+
+
+def _render(
+    code: str,
+    out_path: Path,
+    theme_name: str,
+    language: str,
+    font_size: int,
+    line_numbers: bool,
+    title: str,
+) -> None:
+    style = _get_style(theme_name)
+    bg_color = _hex(style.background_color, "#1e1e1e")
+    fg_color = _hex(style.style_for_token(Token.Text).get("color"))
+
+    font = _load_font(font_size)
+    lines = _to_lines(_tokenize(code, language), style)
+
+    # ── metrics ──
+    char_w = _probe.textlength("M", font=font)
+    ascent, descent = font.getmetrics()
+    line_h = ascent + descent + 4
+
+    pad_x, pad_y = 34, 26
+    bar_h = 40
+
+    gutter_w = 0
+    if line_numbers:
+        gutter_w = int(_probe.textlength(str(len(lines)), font=font)) + 18
+
+    max_w = max(
+        (sum(_probe.textlength(seg, font=font) for seg, _ in ln) for ln in lines),
+        default=char_w * 10,
+    )
+
+    content_w = int(max_w) + gutter_w
+    width = max(520, min(1800, content_w + pad_x * 2))
+    height = bar_h + pad_y * 2 + line_h * len(lines)
+
+    # ── base card ──
+    card = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(card)
+    draw.rounded_rectangle([0, 0, width - 1, height - 1], radius=14, fill=bg_color)
+
+    # title bar + window controls
+    draw.rounded_rectangle([0, 0, width - 1, bar_h], radius=14, fill=bg_color)
+    draw.rectangle([0, bar_h - 14, width - 1, bar_h], fill=bg_color)
+    for i, dot in enumerate(("#ff5f56", "#ffbd2e", "#27c93f")):
+        cx = 22 + i * 22
+        draw.ellipse([cx - 6, bar_h // 2 - 6, cx + 6, bar_h // 2 + 6], fill=dot)
+
+    if title:
+        tw = _probe.textlength(title, font=_load_font(13))
+        draw.text(
+            ((width - tw) / 2, bar_h / 2 - 8),
+            title,
+            font=_load_font(13),
+            fill="#9a9a9a",
+        )
+
+    # ── code ──
+    y = bar_h + pad_y
+    for idx, segments in enumerate(lines, start=1):
+        if line_numbers:
+            num = str(idx)
+            nw = _probe.textlength(num, font=font)
+            draw.text(
+                (pad_x + gutter_w - nw - 12, y),
+                num,
+                font=font,
+                fill="#5c5c5c",
+            )
+
+        x = pad_x + gutter_w
+        for text, color in segments:
+            draw.text((x, y), text, font=font, fill=color or fg_color)
+            x += _probe.textlength(text, font=font)
+        y += line_h
+
+    # ── drop shadow + flatten ──
+    shadow_pad, blur = 26, 14
+    canvas = Image.new(
+        "RGBA", (width + shadow_pad * 2, height + shadow_pad * 2), (255, 255, 255, 255)
+    )
+    mask = Image.new("L", canvas.size, 0)
+    ImageDraw.Draw(mask).rounded_rectangle(
+        [shadow_pad, shadow_pad + 6, shadow_pad + width, shadow_pad + height + 6],
+        radius=14,
+        fill=120,
+    )
+    shadow = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    shadow.paste((0, 0, 0, 255), (0, 0), mask.filter(ImageFilter.GaussianBlur(blur)))
+
+    canvas = Image.alpha_composite(canvas, shadow)
+    canvas.paste(card, (shadow_pad, shadow_pad), card)
+    canvas.convert("RGB").save(out_path, "PNG", optimize=True)
+
+
+# ─────────────────────────── API ───────────────────────────
 
 class CarbonAPI:
     def __init__(self, cache_dir: str = "cache", timeout_s: int = 25):
         self.language = "auto"
-        self.drop_shadow = True
-        self.drop_shadow_blur = "68px"
-        self.drop_shadow_offset = "20px"
         self.font_family = "JetBrains Mono"
-        self.width_adjustment = True
         self.watermark = False
 
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-
-        self._timeout = aiohttp.ClientTimeout(total=timeout_s)
-        self._session: Optional[aiohttp.ClientSession] = None
-
-    async def _session_get(self) -> aiohttp.ClientSession:
-        if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession(
-                timeout=self._timeout,
-                headers={
-                    "Content-Type": "application/json",
-                    "User-Agent": "sakilMusic/CarbonClient",
-                },
-            )
-        return self._session
+        _ensure_font(self.cache_dir)
 
     async def close(self):
-        if self._session and not self._session.closed:
-            await self._session.close()
+        """Purane network client ka compatibility stub."""
+        return None
 
     async def generate(self, text: str, user_id) -> str:
-        if not text:
+        if not text or not text.strip():
             raise UnableToFetchCarbon("Empty text.")
         if len(text) > 10000:
             raise UnableToFetchCarbon("Text too long (max 10k characters).")
 
-        session = await self._session_get()
-        errors = []
+        font_size = 15 if len(text) < 1500 else 12
+        out = self.cache_dir / f"carbon_{user_id}_{int(time.time() * 1000)}.png"
 
-        # 3 attempts: pehla random theme, baaki pakke SAFE_THEMES se.
-        for attempt in range(3):
-            pool = themes if attempt == 0 else SAFE_THEMES
-            params = {
-                "code": text,
-                "backgroundColor": random.choice(colour),
-                "theme": random.choice(pool),
-                "dropShadow": self.drop_shadow,
-                "dropShadowOffsetY": self.drop_shadow_offset,
-                "dropShadowBlurRadius": self.drop_shadow_blur,
-                "fontFamily": self.font_family,
-                "language": self.language,
-                "watermark": self.watermark,
-                "widthAdjustment": self.width_adjustment,
-            }
-            url = ENDPOINTS[attempt % len(ENDPOINTS)]
+        try:
+            await asyncio.to_thread(
+                _render,
+                text,
+                out,
+                random.choice(themes),
+                self.language,
+                font_size,
+                True,
+                "RhythmSync",
+            )
+        except Exception as e:
+            raise UnableToFetchCarbon(f"Render failed: {type(e).__name__}: {e}") from e
 
-            try:
-                async with session.post(url, json=params) as resp:
-                    data = await resp.read()
+        if not out.exists() or out.stat().st_size == 0:
+            raise UnableToFetchCarbon("Render produced empty file.")
 
-                    if resp.status != 200:
-                        errors.append(f"{url} -> HTTP {resp.status}: {data[:120]!r}")
-                    elif not data.startswith(PNG_MAGIC):
-                        # 200 mila par body image nahi hai (rate-limit page etc.)
-                        errors.append(f"{url} -> non-PNG body: {data[:120]!r}")
-                    else:
-                        filename = f"carbon_{user_id}_{int(time.time() * 1000)}.png"
-                        out = self.cache_dir / filename
-                        out.write_bytes(data)
-                        return str(out.resolve())
+        return str(out.resolve())
 
-            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-                errors.append(f"{url} -> {e!r}")
-
-            if attempt < 2:
-                await asyncio.sleep(1.5 * (attempt + 1))
-
-        raise UnableToFetchCarbon("All attempts failed: " + " | ".join(errors))
+# ═══════════════════════════════════════════════════════════
+#         🌺 RhythmSync 🌺
+#   github.com/SunloMusicOfficial/RhythmSync
+# ═══════════════════════════════════════════════════════════
