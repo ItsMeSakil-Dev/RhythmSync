@@ -471,6 +471,28 @@ async def smart_send_message(
         return None
 
 
+# ═══════════════════════════════════════════════════════════
+#  ✅ FIX: FILE_ID CACHE — pehli successful upload ke baad URL
+#  ko dobara fetch/curl karne ki zaroorat nahi. Agar cached
+#  file_id kabhi invalid nikle (expired/deleted on Telegram's
+#  side), automatically original source pe fallback karke
+#  cache refresh ho jaata hai.
+# ═══════════════════════════════════════════════════════════
+# Key: original photo value jo caller ne diya (URL ya local path)
+# Value: last successful upload se mila Telegram file_id
+_photo_file_id_cache: Dict[str, str] = {}
+
+
+def _extract_file_id(data: Optional[Dict]) -> Optional[str]:
+    """Bot-API sendPhoto response dict se sabse badi size ka file_id nikalo."""
+    if not data:
+        return None
+    sizes = data.get("photo")
+    if sizes:
+        return sizes[-1].get("file_id")  # largest size list mein last hoti hai
+    return None
+
+
 async def smart_send_photo(
     chat_id: Union[int, str],
     photo: str,
@@ -478,37 +500,67 @@ async def smart_send_photo(
     reply_markup: Optional[List[List[Dict]]] = None,
     parse_mode: str = "HTML",
 ):
-    """Send a photo with colored buttons. Falls back to Pyrogram on failure."""
+    """Send a photo with colored buttons. Falls back to Pyrogram on failure.
+
+    ⭐ file_id cache: pehli successful upload ke baad, agli saari sends
+    cached file_id se jaati hain — URL fetch zero. Agar cached file_id
+    kabhi fail ho jaye (deleted/expired), automatically original source
+    pe fallback karke cache refresh kar leta hai.
+    """
     from RHYTHMSYNC import app
     from pyrogram import enums
 
-    try:
-        data = await send_photo_colored(
-            chat_id=chat_id,
-            photo=photo,
-            caption=caption,
-            reply_markup=reply_markup or [],
-            parse_mode=parse_mode,
-        )
-        if data and data.get("message_id"):
-            try:
-                return await app.get_messages(chat_id, data["message_id"])
-            except Exception:
-                return data
-    except Exception as e:
-        logger.debug(f"smart_send_photo Bot API path failed: {e}")
+    cached_id = _photo_file_id_cache.get(photo)
 
-    try:
-        return await app.send_photo(
-            chat_id=chat_id,
-            photo=photo,
-            caption=caption,
-            parse_mode=enums.ParseMode.HTML if parse_mode == "HTML" else enums.ParseMode.MARKDOWN,
-            reply_markup=buttons_to_inline_markup(reply_markup) if reply_markup else None,
+    async def _try_send(photo_value: str):
+        """Ek poora attempt: Bot API pehle, fir Pyrogram. Message ya None."""
+        try:
+            data = await send_photo_colored(
+                chat_id=chat_id,
+                photo=photo_value,
+                caption=caption,
+                reply_markup=reply_markup or [],
+                parse_mode=parse_mode,
+            )
+            if data and data.get("message_id"):
+                file_id = _extract_file_id(data)
+                if file_id:
+                    _photo_file_id_cache[photo] = file_id  # cache (re)fill
+                try:
+                    return await app.get_messages(chat_id, data["message_id"])
+                except Exception:
+                    return data
+        except Exception as e:
+            logger.debug(f"smart_send_photo Bot API path failed: {e}")
+
+        try:
+            msg = await app.send_photo(
+                chat_id=chat_id,
+                photo=photo_value,
+                caption=caption,
+                parse_mode=enums.ParseMode.HTML if parse_mode == "HTML" else enums.ParseMode.MARKDOWN,
+                reply_markup=buttons_to_inline_markup(reply_markup) if reply_markup else None,
+            )
+            if getattr(msg, "photo", None):
+                _photo_file_id_cache[photo] = msg.photo.file_id  # cache (re)fill
+            return msg
+        except Exception as e:
+            logger.warning(f"smart_send_photo: Pyrogram fallback failed: {e}")
+            return None
+
+    # 1. Fast path — cached file_id (original URL ko bilkul touch nahi karta)
+    if cached_id:
+        result = await _try_send(cached_id)
+        if result:
+            return result
+        # Cached file_id stale nikla — drop karke original source try karo
+        logger.warning(
+            "smart_send_photo: cached file_id invalid, falling back to original source"
         )
-    except Exception as e:
-        logger.warning(f"smart_send_photo: Pyrogram fallback failed: {e}")
-        return None
+        _photo_file_id_cache.pop(photo, None)
+
+    # 2. Normal path — original URL/path (success pe cache bhi bharta hai)
+    return await _try_send(photo)
 
 
 def _camel_to_snake(name: str) -> str:
@@ -579,6 +631,12 @@ async def smart_send_media(
 
 
 async def smart_edit_message_text(
+    chat_id: Union[int, str],
+    message_id: int,
+    text: str,
+    reply
+   
+   async def smart_edit_message_text(
     chat_id: Union[int, str],
     message_id: int,
     text: str,
@@ -759,3 +817,4 @@ async def smart_edit_message_caption(
 #         🌺 RhythmSync 🌺
 #   github.com/SunloMusicOfficial/RhythmSync
 # ═══════════════════════════════════════════════════════════
+
