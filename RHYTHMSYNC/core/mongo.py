@@ -1,0 +1,31 @@
+# ═══════════════════════════════════════════════════════════
+#        🌺 RhythmSync 🌺
+#   GɪᴛHᴜʙ : github.com/SunloMusicOfficial/RhythmSync
+#   Dᴇᴠʟᴏᴘᴇʀ : @YO_UR_OFFICIAL_CRUSH | Telegram
+# ═══════════════════════════════════════════════════════════
+
+from motor.motor_asyncio import AsyncIOMotorClient
+from config import MONGO_DB_URI
+from ..logging import LOGGER
+
+LOGGER(__name__).info("Connecting to your Mongo Database...")
+
+try:
+    _mongo_async_ = AsyncIOMotorClient(
+        MONGO_DB_URI,
+        serverSelectionTimeoutMS=5000,
+        maxPoolSize=15,
+        minPoolSize=1,
+        maxIdleTimeMS=45000,
+        waitQueueTimeoutMS=5000,
+    )
+    mongodb = _mongo_async_.Sakil
+    LOGGER(__name__).info("Connected to your Mongo Database.")
+except Exception as e:
+    LOGGER(__name__).error(f"Failed to connect to your Mongo Database: {e}")
+    exit()
+
+# ═══════════════════════════════════════════════════════════
+#         🌺 RhythmSync 🌺
+#   github.com/SunloMusicOfficial/RhythmSync
+# ═══════════════════════════════════════════════════════════

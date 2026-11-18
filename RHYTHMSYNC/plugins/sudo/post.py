@@ -1,0 +1,24 @@
+# ═══════════════════════════════════════════════════════════
+#        🌺 RhythmSync 🌺
+#   GɪᴛHᴜʙ : github.com/SunloMusicOfficial/RhythmSync
+#   Dᴇᴠʟᴏᴘᴇʀ : @YO_UR_OFFICIAL_CRUSH | Telegram
+# ═══════════════════════════════════════════════════════════
+
+from pyrogram import filters
+from RHYTHMSYNC import app
+from config import OWNER_ID
+
+destination_group_id = -1002425220992
+
+@app.on_message(filters.command(["post"], prefixes=["/", "."]) & filters.user(OWNER_ID))
+async def copy_messages(_, message):
+
+    if message.reply_to_message:
+
+        await message.reply_to_message.copy(destination_group_id)
+        await message.reply("ᴘᴏsᴛ sᴜᴄᴄᴇssғᴜʟ ᴅᴏɴᴇ ")
+
+# ═══════════════════════════════════════════════════════════
+#         🌺 RhythmSync 🌺
+#   github.com/SunloMusicOfficial/RhythmSync
+# ═══════════════════════════════════════════════════════════

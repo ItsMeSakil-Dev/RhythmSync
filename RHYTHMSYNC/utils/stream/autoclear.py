@@ -1,0 +1,29 @@
+# ═══════════════════════════════════════════════════════════
+#        🌺 RhythmSync 🌺
+#   GɪᴛHᴜʙ : github.com/SunloMusicOfficial/RhythmSync
+#   Dᴇᴠʟᴏᴘᴇʀ : @YO_UR_OFFICIAL_CRUSH | Telegram
+# ═══════════════════════════════════════════════════════════
+
+import os
+
+from config import autoclean
+
+
+async def auto_clean(popped):
+    try:
+        rem = popped["file"]
+        autoclean.remove(rem)
+        count = autoclean.count(rem)
+        if count == 0:
+            if "vid_" not in rem and "live_" not in rem and "index_" not in rem:
+                try:
+                    os.remove(rem)
+                except:
+                    pass
+    except:
+        pass
+
+# ═══════════════════════════════════════════════════════════
+#         🌺 RhythmSync 🌺
+#   github.com/SunloMusicOfficial/RhythmSync
+# ═══════════════════════════════════════════════════════════
