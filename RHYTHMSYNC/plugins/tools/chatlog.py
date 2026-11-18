@@ -23,8 +23,8 @@ BOT_INFO: Optional[types.User] = None
 BOT_ID: Optional[int] = None
 
 PHOTOS = [
-    "https://files.catbox.moe/a6sz5r.jpg", 
-    "https://files.catbox.moe/53szdj.jpg",
+    "https://i.imgur.com/I3paaU9.jpeg", 
+    "https://i.imgur.com/I3paaU9.jpeg",
 ]
 
 def _is_valid_url(url: Optional[str]) -> bool:
