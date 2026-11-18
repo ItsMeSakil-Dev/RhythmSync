@@ -26,10 +26,12 @@ async def translate(_, message: Message):
         if "//" in arg:
             source_lang, target_lang = arg.split("//")
         else:
-            source_lang = await translator.detect(content)
+            detected = await translator.detect(content)
+            source_lang = detected.lang  # ✅ extract the actual language code
             target_lang = arg
     except IndexError:
-        source_lang = await translator.detect(content)
+        detected = await translator.detect(content)
+        source_lang = detected.lang  # ✅ extract the actual language code
         target_lang = "en"
 
     try:
