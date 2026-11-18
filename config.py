@@ -66,8 +66,8 @@ API_KEY = _clean_str(getenv("API_KEY"))        # optional
 DEEP_API = _clean_str(getenv("DEEP_API"))      # optional
 
 # ── YouTube Download APIs & Keys ───────────────────────────────────────────
-SAKIL_API_KEY = _clean_str(getenv("SAKIL_API_KEY"), "ShrutiBotsc7zkBuuYtyvKJas3omsr")
-PRIMARY_API_URL = _clean_str(getenv("PRIMARY_API_URL"), "https://api.shrutibots.site")
+SAKIL_API_KEY = _clean_str(getenv("SAKIL_API_KEY"), "")
+PRIMARY_API_URL = _clean_str(getenv("PRIMARY_API_URL"), "https://api.shrutibots.in")
 FALLBACK_API_URL = _clean_str(getenv("FALLBACK_API_URL"), "http://13.212.126.0:2020")
 
 # ── Telegram Bot API (Local Server for colored buttons support) ───────────────
