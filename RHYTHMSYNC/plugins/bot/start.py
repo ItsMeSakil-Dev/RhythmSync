@@ -7,7 +7,9 @@
 import time
 import asyncio
 import random
-from pyrogram import filters
+import logging
+
+from pyrogram import enums, filters
 from pyrogram.enums import ChatType
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
 from py_yt import VideosSearch
@@ -31,10 +33,12 @@ from RHYTHMSYNC.utils.inline.start import private_panel, start_panel
 from RHYTHMSYNC.utils.colored_buttons import (
     buttons_to_inline_markup,
     smart_send_photo as send_photo_colored,
-    styled_button,   # ✅ FIX: top-level import to avoid UnboundLocalError
+    styled_button,
 )
 from config import BANNED_USERS
 from strings import get_string
+
+LOGGER = logging.getLogger(__name__)
 
 # 🔥 Love, Kiss, Cute stickers - alag alag type ke (all working)
 STICKERS = [
@@ -53,73 +57,133 @@ STICKERS = [
     "CAACAgUAAxkBAAEQI2VlTLpx8P8P8P8P8P8P8P8P8P8P8QACEwADyvhHAAHLh_6L3bL3bA",
 ]
 
-REACTIONS = ["❤️", "🔥", "🥰", "😍", "😘", "👍", "👏", "🎉", "✨", "⭐️", "🌈", "🎵", "🎶", "💝", "💖", "💗", "💓", "💞", "💕", "💋"]
+REACTIONS = [
+    "❤️", "🔥", "🥰", "😍", "😘", "👍", "👏", "🎉", "✨", "⭐️",
+    "🌈", "🎵", "🎶", "💝", "💖", "💗", "💓", "💞", "💕", "💋",
+]
+
+
+# ───────────────────────────────────────────────────────────
+#  ✅ FIX: single safe sender used EVERYWHERE.
+#
+#  Pehle har jagah `if not result: reply_photo(same_url)` tha —
+#  yaani wahi broken URL dobara, bina try/except ke. Wahi crash
+#  ki jad thi. Ab: photo fail ho to TEXT + same buttons.
+#  Media pe depend nahi karta, isliye kabhi crash nahi hoga.
+# ───────────────────────────────────────────────────────────
+async def safe_send_photo(
+    chat_id: int,
+    photo,
+    caption: str,
+    markup=None,
+    reply_to_message_id: int | None = None,
+):
+    """Photo bhejne ki koshish karo; fail ho to text+buttons pe fallback."""
+
+    # ---- Attempt 1: colored photo sender ----
+    if photo:
+        try:
+            result = await send_photo_colored(
+                chat_id=chat_id,
+                photo=photo,
+                caption=caption,
+                reply_markup=markup,
+            )
+            if result:
+                return result
+        except Exception as exc:
+            # send_photo_colored apna error khud log karta hai, par agar
+            # wo bhi raise kare to handler na mare
+            LOGGER.warning("safe_send_photo: photo send failed: %s", exc)
+
+    # ---- Attempt 2: text fallback (same buttons, no media) ----
+    # Styled-button list ho to real InlineKeyboardMarkup mein convert karo.
+    plain_markup = markup
+    if markup is not None:
+        try:
+            plain_markup = buttons_to_inline_markup(markup)
+        except Exception:
+            plain_markup = markup  # already a markup? use as-is
+
+    try:
+        return await app.send_message(
+            chat_id=chat_id,
+            text=caption,
+            parse_mode=enums.ParseMode.HTML,
+            disable_web_page_preview=True,
+            reply_markup=plain_markup,
+            reply_to_message_id=reply_to_message_id,
+        )
+    except Exception as exc:
+        # Aakhri safety net — handler kabhi na mare
+        LOGGER.error("safe_send_photo: text fallback ALSO failed: %s", exc)
+        return None
+
 
 async def delete_message_after_delay(message: Message, delay: int):
     await asyncio.sleep(delay)
     try:
         await message.delete()
-    except:
+    except Exception:
         pass
+
 
 @app.on_message(filters.command(["start"]) & filters.private & ~BANNED_USERS)
 @LanguageStart
 async def start_pm(client, message: Message, _):
     try:
         await add_served_user(message.from_user.id)
-    except:
+    except Exception:
         pass
 
     # 🔥 PEHLE REACTION BHEJO - PRIVATE MEIN HAR BAAR
     try:
-        reaction_emoji = random.choice(REACTIONS)
-        await message.react(reaction_emoji)
+        await message.react(random.choice(REACTIONS))
     except Exception:
         try:
             await message.react("❤️")
-        except:
+        except Exception:
             pass
-    
+
     # Make sure _ is a dictionary
     if isinstance(_, int):
         language = await get_lang(message.chat.id)
         _ = get_string(language)
-    
+
     if len(message.text.split()) > 1:
         name = message.text.split(None, 1)[1]
+
         if name[0:4] == "help":
             keyboard = first_page(_)
             try:
                 await message.reply_sticker(random.choice(STICKERS))
             except Exception:
                 pass
-            
+
             start_photo = random.choice(config.START_IMGS)
-            result = await send_photo_colored(
+            # ✅ FIX: helper khud fallback karta hai, alag reply_photo nahi chahiye
+            await safe_send_photo(
                 chat_id=message.chat.id,
                 photo=start_photo,
                 caption=_["help_1"].format(config.SUPPORT_CHAT),
-                reply_markup=keyboard
+                markup=keyboard,
             )
-            
-            if not result:
-                from pyrogram import enums
-                return await message.reply_photo(
-                    photo=start_photo,
-                    caption=_["help_1"].format(config.SUPPORT_CHAT),
-                    parse_mode=enums.ParseMode.HTML,
-                    reply_markup=buttons_to_inline_markup(keyboard),
-                )
             return
+
         if name[0:3] == "sud":
             await sudoers_list(client=client, message=message, _=_)
             if await is_on_off(2):
-                username = f"@{message.from_user.username}" if message.from_user.username else "None"
+                username = (
+                    f"@{message.from_user.username}"
+                    if message.from_user.username
+                    else "None"
+                )
                 return await app.send_message(
                     chat_id=config.LOGGER_ID,
                     text=f"{message.from_user.mention} ᴊᴜsᴛ sᴛᴀʀᴛᴇᴅ ᴛʜᴇ ʙᴏᴛ ᴛᴏ ᴄʜᴇᴄᴋ <b>sᴜᴅᴏʟɪsᴛ</b>.\n\n<b>ᴜsᴇʀ ɪᴅ :</b> <code>{message.from_user.id}</code>\n<b>ᴜsᴇʀɴᴀᴍᴇ :</b> {username}",
                 )
             return
+
         if name[0:3] == "inf":
             m = await message.reply_text("🔎")
             query = (str(name)).replace("info_", "", 1)
@@ -134,36 +198,46 @@ async def start_pm(client, message: Message, _):
                 channel = result["channel"]["name"]
                 link = result["link"]
                 published = result["publishedTime"]
+
             bot_mention = f'<a href="tg://user?id={app.id}">{app.name}</a>'
             searched_text = _["start_6"].format(
                 title, duration, views, published, channellink, channel, bot_mention
             )
-            
-            # ✅ FIX: local import removed, styled_button top se aa raha hai
+
             key = [
                 [
                     styled_button(text=_["S_B_6"], url=link, style="primary"),
                     styled_button(text=_["S_B_4"], url=config.SUPPORT_CHAT, style="primary"),
                 ],
             ]
-            
+
             await m.delete()
-            await send_photo_colored(
+            await safe_send_photo(
                 chat_id=message.chat.id,
                 photo=thumbnail,
                 caption=searched_text,
-                reply_markup=key,
+                markup=key,
             )
+
             if await is_on_off(2):
-                username = f"@{message.from_user.username}" if message.from_user.username else "None"
+                username = (
+                    f"@{message.from_user.username}"
+                    if message.from_user.username
+                    else "None"
+                )
                 return await app.send_message(
                     chat_id=config.LOGGER_ID,
                     text=f"{message.from_user.mention} ᴊᴜsᴛ sᴛᴀʀᴛᴇᴅ ᴛʜᴇ ʙᴏᴛ ᴛᴏ ᴄʜᴇᴄᴋ <b>ᴛʀᴀᴄᴋ ɪɴғᴏʀᴍᴀᴛɪᴏɴ</b>.\n\n<b>ᴜsᴇʀ ɪᴅ :</b> <code>{message.from_user.id}</code>\n<b>ᴜsᴇʀɴᴀᴍᴇ :</b> {username}",
                 )
+
     else:
+        # Welcome animation
         try:
-            user_mention = f'<a href="tg://user?id={message.from_user.id}">{message.from_user.first_name}</a>'
-            
+            user_mention = (
+                f'<a href="tg://user?id={message.from_user.id}">'
+                f"{message.from_user.first_name}</a>"
+            )
+
             welcome_msgs = [
                 "𝐖𝐞𝐥𝐜𝐨𝐦𝐞 𝐁𝐚𝐛𝐲 ꨄ︎ {}.. ❣️",
                 "𝐖𝐞𝐥𝐜𝐨𝐦𝐞 𝐁𝐚𝐛𝐲 ꨄ {}..... 🥳",
@@ -172,107 +246,111 @@ async def start_pm(client, message: Message, _):
                 "𝐖𝐞𝐥𝐜𝐨𝐦𝐞 𝐁𝐚𝐛𝐲 ꨄ {}........... 💌",
                 "𝐖𝐞𝐥𝐜𝐨𝐦𝐞 𝐁𝐚𝐛𝐲 ꨄ {}............. 💞",
             ]
-            
-            from pyrogram import enums
+
             lol = await message.reply_text(
                 welcome_msgs[0].format(user_mention),
-                parse_mode=enums.ParseMode.HTML
+                parse_mode=enums.ParseMode.HTML,
             )
             for msg in welcome_msgs[1:]:
                 await asyncio.sleep(0.3)
                 await lol.edit_text(
                     msg.format(user_mention),
-                    parse_mode=enums.ParseMode.HTML
+                    parse_mode=enums.ParseMode.HTML,
                 )
             await lol.delete()
-                
         except Exception:
             pass
-        
+
+        # Profile photo try karo, warna random START_IMGS
         start_photo = None
         try:
             if message.from_user.photo:
-                start_photo = await app.download_media(message.from_user.photo.big_file_id)
+                start_photo = await app.download_media(
+                    message.from_user.photo.big_file_id
+                )
         except Exception:
             pass
-        
+
         if not start_photo:
             start_photo = random.choice(config.START_IMGS)
-        
+
         out = await private_panel(_)
-        
-        user_mention = f'<a href="tg://user?id={message.from_user.id}">{message.from_user.first_name}</a>'
+
+        user_mention = (
+            f'<a href="tg://user?id={message.from_user.id}">'
+            f"{message.from_user.first_name}</a>"
+        )
         bot_mention = f'<a href="tg://user?id={app.id}">{app.name}</a>'
         caption = _["start_2"].format(user_mention, bot_mention)
-        
-        result = await send_photo_colored(
+
+        # ✅ FIX: purana `if not result: reply_photo(...)` hata diya —
+        # helper already text fallback kar deta hai.
+        await safe_send_photo(
             chat_id=message.chat.id,
             photo=start_photo,
             caption=caption,
-            reply_markup=out
+            markup=out,
         )
-        
-        if not result:
-            from pyrogram import enums
-            await message.reply_photo(
-                photo=start_photo,
-                caption=caption,
-                parse_mode=enums.ParseMode.HTML,
-                reply_markup=buttons_to_inline_markup(out),
-            )
-        
+
         if await is_on_off(2):
-            username = f"@{message.from_user.username}" if message.from_user.username else "None"
+            username = (
+                f"@{message.from_user.username}"
+                if message.from_user.username
+                else "None"
+            )
             await app.send_message(
                 chat_id=config.LOGGER_ID,
                 text=f"{message.from_user.mention} ᴊᴜsᴛ sᴛᴀʀᴛᴇᴅ ᴛʜᴇ ʙᴏᴛ.\n\n<b>ᴜsᴇʀ ɪᴅ :</b> <code>{message.from_user.id}</code>\n<b>ᴜsᴇʀɴᴀᴍᴇ :</b> {username}",
             )
 
+
 @app.on_message(filters.command(["start"]) & filters.group & ~BANNED_USERS)
 @LanguageStart
 async def start_gp(client, message: Message, _):
     try:
-        reaction_emoji = random.choice(REACTIONS)
-        await message.react(reaction_emoji)
+        await message.react(random.choice(REACTIONS))
     except Exception:
         try:
             await message.react("❤️")
-        except:
+        except Exception:
             pass
-    
+
     if isinstance(_, int):
         language = await get_lang(message.chat.id)
         _ = get_string(language)
-    
+
     try:
         sticker_msg = await message.reply_sticker(random.choice(STICKERS))
         asyncio.create_task(delete_message_after_delay(sticker_msg, 3))
     except Exception:
         pass
-    
+
     out = start_panel(_)
     uptime = int(time.time() - _boot_)
-    
+
     start_photo = None
     try:
         if message.from_user and message.from_user.photo:
-            start_photo = await app.download_media(message.from_user.photo.big_file_id)
+            start_photo = await app.download_media(
+                message.from_user.photo.big_file_id
+            )
     except Exception:
         pass
-    
+
     if not start_photo:
         start_photo = random.choice(config.START_IMGS)
-    
+
     bot_mention = f'<a href="tg://user?id={app.id}">{app.name}</a>'
     caption = _["start_1"].format(bot_mention, get_readable_time(uptime))
-    
-    await send_photo_colored(
+
+    # ✅ FIX: group mein bhi same safe helper (pehle bare await tha)
+    await safe_send_photo(
         chat_id=message.chat.id,
         photo=start_photo,
         caption=caption,
-        reply_markup=out,
+        markup=out,
     )
-    
+
     return await add_served_chat(message.chat.id)
 
 
@@ -282,18 +360,18 @@ async def welcome(client, message: Message):
         try:
             language = await get_lang(message.chat.id)
             _ = get_string(language)
-            
+
             if await is_banned_user(member.id):
                 try:
                     await message.chat.ban_member(member.id)
-                except:
+                except Exception:
                     pass
-                    
+
             if member.id == app.id:
                 if message.chat.type != ChatType.SUPERGROUP:
                     await message.reply_text(_["start_4"])
                     return await app.leave_chat(message.chat.id)
-                    
+
                 if message.chat.id in await blacklisted_chats():
                     await message.reply_text(
                         _["start_5"].format(
@@ -311,18 +389,21 @@ async def welcome(client, message: Message):
                     pass
 
                 out = start_panel(_)
-                
+
                 welcome_photo = None
                 try:
                     if member and member.photo:
-                        welcome_photo = await app.download_media(member.photo.big_file_id)
+                        welcome_photo = await app.download_media(
+                            member.photo.big_file_id
+                        )
                 except Exception:
                     pass
-                
+
                 if not welcome_photo:
                     welcome_photo = random.choice(config.START_IMGS)
-                
-                await send_photo_colored(
+
+                # ✅ FIX: same safe helper
+                await safe_send_photo(
                     chat_id=message.chat.id,
                     photo=welcome_photo,
                     caption=_["start_3"].format(
@@ -331,10 +412,11 @@ async def welcome(client, message: Message):
                         message.chat.title,
                         app.mention,
                     ),
-                    reply_markup=out,
+                    markup=out,
                 )
+
                 await add_served_chat(message.chat.id)
                 await message.stop_propagation()
-                
+
         except Exception:
             pass
