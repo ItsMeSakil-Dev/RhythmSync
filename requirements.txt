@@ -3,11 +3,10 @@ kurigram==2.2.15
 urllib3
 aiohttp
 apscheduler
-bing_image_downloader
 bs4
 flask
 gunicorn
-edge-tts 
+edge-tts
 ffmpeg-python
 future
 gitpython
@@ -16,7 +15,6 @@ gpytranslate
 gtts
 groq
 httpx[http2]==0.28.1
-lexica-api
 motor
 nekosbest
 numpy
