@@ -63,7 +63,7 @@ PLAYLIST_FETCH_LIMIT = _clean_int(getenv("PLAYLIST_FETCH_LIMIT"), 30)
 COOKIE_URL = _clean_str(getenv("COOKIE_URL"), "https://pastebin.com/RurxsvMF")
 API_URL = _clean_str(getenv("API_URL"))        # optional
 API_KEY = _clean_str(getenv("API_KEY"))        # optional 
-DEEP_API = _clean_str(getenv("DEEP_API"))      # optional
+DEEP_API = _clean_str(getenv("DEEP_API"), "8f147d62-2e67-4eec-98db-f315013a6202")      # optional
 
 # ── YouTube Download APIs & Keys ───────────────────────────────────────────
 SAKIL_API_KEY = _clean_str(getenv("SAKIL_API_KEY"), "")
