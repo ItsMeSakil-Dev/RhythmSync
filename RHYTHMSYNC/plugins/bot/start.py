@@ -31,25 +31,21 @@ from RHYTHMSYNC.utils.inline.start import private_panel, start_panel
 from RHYTHMSYNC.utils.colored_buttons import (
     buttons_to_inline_markup,
     smart_send_photo as send_photo_colored,
+    styled_button,   # ✅ FIX: top-level import to avoid UnboundLocalError
 )
 from config import BANNED_USERS
 from strings import get_string
 
 # 🔥 Love, Kiss, Cute stickers - alag alag type ke (all working)
 STICKERS = [
-    # ❤️ Love stickers
     "CAACAgUAAxkBAAEQI1RlTLnRAy4h9lOS6jgS5FYsQoruOAAC1gMAAg6ryVcldUr_lhPexzME",
     "CAACAgQAAxkBAAMraaaBHm27-Wy2uQoptU3WZAAB6j3PAALEFQACIPCZUR1h3KoW6nItHgQ",
     "CAACAgQAAxkBAAMtaaaBKyjqLW8aBukB-vtOy-pUCxwAAoIOAAIF9AFSd_QCdbkZVqAeBA",
     "CAACAgQAAxkBAAMvaaaBNyAKbOtk05em_J8gQTmqotsAAhELAAIbGgABUuUNZ1V7LfMMHgQ",
     "CAACAgQAAxkBAAMxaaaBTZjH9A31Qdrb_xgKnrd4700AArgaAAJLO-hR8MN1DY1xe2ceBA",
-    
-    # 💋 Kiss stickers
     "CAACAgQAAxkBAAM5aaaB7A7JfXbtkO7b8ubX6_IjDdIAAhoVAAKRIKFRpathP0j9IIYeBA",
     "CAACAgUAAxkBAAEQI2FlTLpR8P8P8P8P8P8P8P8P8P8P8QACDwADyvhHAAHLh_6L3bL3bA",
     "CAACAgUAAxkBAAEQI2hlTLqJ8P8P8P8P8P8P8P8P8P8P8QACFgADyvhHAAHLh_6L3bL3bA",
-    
-    # 🥰 Cute stickers
     "CAACAgQAAxkBAAMzaaaBUYNDr2RENDvdHTkz5tg-lVcAAmkaAAIIeUlRllAUMDa5YOoeBA",
     "CAACAgQAAxkBAAM7aaaB-elXM9UEYY4OIo4eTCIbgigAAuUVAALryRlQRN37BBGYPgYeBA",
     "CAACAgQAAxkBAAM_aaaCCjmuL6EkqSBKpYbYzK3xKCcAAqYTAAK9jHlQ6vzt6mbH8-ceBA",
@@ -57,7 +53,6 @@ STICKERS = [
     "CAACAgUAAxkBAAEQI2VlTLpx8P8P8P8P8P8P8P8P8P8P8QACEwADyvhHAAHLh_6L3bL3bA",
 ]
 
-# 🔥 Sirf wo reactions jo Telegram 100% support karta hai
 REACTIONS = ["❤️", "🔥", "🥰", "😍", "😘", "👍", "👏", "🎉", "✨", "⭐️", "🌈", "🎵", "🎶", "💝", "💖", "💗", "💓", "💞", "💕", "💋"]
 
 async def delete_message_after_delay(message: Message, delay: int):
@@ -94,13 +89,11 @@ async def start_pm(client, message: Message, _):
         name = message.text.split(None, 1)[1]
         if name[0:4] == "help":
             keyboard = first_page(_)
-            # Random sticker for help command
             try:
                 await message.reply_sticker(random.choice(STICKERS))
             except Exception:
                 pass
             
-            # Try Bot API with colored buttons
             start_photo = random.choice(config.START_IMGS)
             result = await send_photo_colored(
                 chat_id=message.chat.id,
@@ -109,18 +102,14 @@ async def start_pm(client, message: Message, _):
                 reply_markup=keyboard
             )
             
-            # Fallback to Pyrogram if Bot API fails
             if not result:
                 from pyrogram import enums
-                # Note: buttons_to_inline_markup loses colors (no style field in Pyrogram)
-                # For colored buttons, user must have valid BOT_TOKEN set in config
                 return await message.reply_photo(
                     photo=start_photo,
                     caption=_["help_1"].format(config.SUPPORT_CHAT),
                     parse_mode=enums.ParseMode.HTML,
                     reply_markup=buttons_to_inline_markup(keyboard),
                 )
-            return
             return
         if name[0:3] == "sud":
             await sudoers_list(client=client, message=message, _=_)
@@ -145,16 +134,12 @@ async def start_pm(client, message: Message, _):
                 channel = result["channel"]["name"]
                 link = result["link"]
                 published = result["publishedTime"]
-            # Build bot mention properly
             bot_mention = f'<a href="tg://user?id={app.id}">{app.name}</a>'
             searched_text = _["start_6"].format(
                 title, duration, views, published, channellink, channel, bot_mention
             )
             
-            # Import colored button functions
-            from RHYTHMSYNC.utils.colored_buttons import styled_button, buttons_to_inline_markup
-            
-            # Create colored buttons
+            # ✅ FIX: local import removed, styled_button top se aa raha hai
             key = [
                 [
                     styled_button(text=_["S_B_6"], url=link, style="primary"),
@@ -176,12 +161,9 @@ async def start_pm(client, message: Message, _):
                     text=f"{message.from_user.mention} ᴊᴜsᴛ sᴛᴀʀᴛᴇᴅ ᴛʜᴇ ʙᴏᴛ ᴛᴏ ᴄʜᴇᴄᴋ <b>ᴛʀᴀᴄᴋ ɪɴғᴏʀᴍᴀᴛɪᴏɴ</b>.\n\n<b>ᴜsᴇʀ ɪᴅ :</b> <code>{message.from_user.id}</code>\n<b>ᴜsᴇʀɴᴀᴍᴇ :</b> {username}",
                 )
     else:
-        # Airbeats.py style animation - PRIVATE CHAT ONLY
         try:
-            # Build user mention for animation
             user_mention = f'<a href="tg://user?id={message.from_user.id}">{message.from_user.first_name}</a>'
             
-            # Welcome animation
             welcome_msgs = [
                 "𝐖𝐞𝐥𝐜𝐨𝐦𝐞 𝐁𝐚𝐛𝐲 ꨄ︎ {}.. ❣️",
                 "𝐖𝐞𝐥𝐜𝐨𝐦𝐞 𝐁𝐚𝐛𝐲 ꨄ {}..... 🥳",
@@ -207,7 +189,6 @@ async def start_pm(client, message: Message, _):
         except Exception:
             pass
         
-        # 🖼️ Get user profile photo, fallback to config image
         start_photo = None
         try:
             if message.from_user.photo:
@@ -218,15 +199,12 @@ async def start_pm(client, message: Message, _):
         if not start_photo:
             start_photo = random.choice(config.START_IMGS)
         
-        # Get buttons with colored support
         out = await private_panel(_)
         
-        # Build caption with proper HTML mention formatting
         user_mention = f'<a href="tg://user?id={message.from_user.id}">{message.from_user.first_name}</a>'
         bot_mention = f'<a href="tg://user?id={app.id}">{app.name}</a>'
         caption = _["start_2"].format(user_mention, bot_mention)
         
-        # Try colored buttons first via Bot API
         result = await send_photo_colored(
             chat_id=message.chat.id,
             photo=start_photo,
@@ -234,11 +212,8 @@ async def start_pm(client, message: Message, _):
             reply_markup=out
         )
         
-        # Fallback to Pyrogram if Bot API fails
         if not result:
             from pyrogram import enums
-            # Note: buttons_to_inline_markup loses colors (no style field in Pyrogram)
-            # For colored buttons, user must have valid BOT_TOKEN set in config
             await message.reply_photo(
                 photo=start_photo,
                 caption=caption,
@@ -246,7 +221,6 @@ async def start_pm(client, message: Message, _):
                 reply_markup=buttons_to_inline_markup(out),
             )
         
-        # Log
         if await is_on_off(2):
             username = f"@{message.from_user.username}" if message.from_user.username else "None"
             await app.send_message(
@@ -257,7 +231,6 @@ async def start_pm(client, message: Message, _):
 @app.on_message(filters.command(["start"]) & filters.group & ~BANNED_USERS)
 @LanguageStart
 async def start_gp(client, message: Message, _):
-    # 🔥 PEHLE REACTION BHEJO - GROUP MEIN HAR BAAR
     try:
         reaction_emoji = random.choice(REACTIONS)
         await message.react(reaction_emoji)
@@ -267,12 +240,10 @@ async def start_gp(client, message: Message, _):
         except:
             pass
     
-    # Make sure _ is a dictionary
     if isinstance(_, int):
         language = await get_lang(message.chat.id)
         _ = get_string(language)
     
-    # 🔥 STICKER PHIR BHEJO
     try:
         sticker_msg = await message.reply_sticker(random.choice(STICKERS))
         asyncio.create_task(delete_message_after_delay(sticker_msg, 3))
@@ -282,7 +253,6 @@ async def start_gp(client, message: Message, _):
     out = start_panel(_)
     uptime = int(time.time() - _boot_)
     
-    # User profile photo or fallback image
     start_photo = None
     try:
         if message.from_user and message.from_user.photo:
@@ -293,12 +263,9 @@ async def start_gp(client, message: Message, _):
     if not start_photo:
         start_photo = random.choice(config.START_IMGS)
     
-    # Build caption with proper HTML mention
     bot_mention = f'<a href="tg://user?id={app.id}">{app.name}</a>'
     caption = _["start_1"].format(bot_mention, get_readable_time(uptime))
     
-    # Send via Bot API HTTP to keep primary/success/danger colors.
-    # smart_send_photo auto-falls back to Pyrogram if Bot API fails.
     await send_photo_colored(
         chat_id=message.chat.id,
         photo=start_photo,
@@ -338,7 +305,6 @@ async def welcome(client, message: Message):
                     )
                     return await app.leave_chat(message.chat.id)
 
-                # 🔥 Random love/kiss/cute sticker for welcome
                 try:
                     await message.reply_sticker(random.choice(STICKERS))
                 except Exception:
@@ -346,7 +312,6 @@ async def welcome(client, message: Message):
 
                 out = start_panel(_)
                 
-                # Get user who joined's profile photo, fallback to config START_IMGS
                 welcome_photo = None
                 try:
                     if member and member.photo:
@@ -357,8 +322,6 @@ async def welcome(client, message: Message):
                 if not welcome_photo:
                     welcome_photo = random.choice(config.START_IMGS)
                 
-                # Send via Bot API HTTP to keep primary/success/danger colors.
-                # smart_send_photo auto-falls back to Pyrogram if Bot API fails.
                 await send_photo_colored(
                     chat_id=message.chat.id,
                     photo=welcome_photo,
@@ -375,8 +338,3 @@ async def welcome(client, message: Message):
                 
         except Exception:
             pass
-
-# ═══════════════════════════════════════════════════════════
-#         🌺 RhythmSync 🌺
-#   github.com/SunloMusicOfficial/RhythmSync
-# ═══════════════════════════════════════════════════════════
