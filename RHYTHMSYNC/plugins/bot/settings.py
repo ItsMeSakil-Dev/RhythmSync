@@ -39,6 +39,7 @@ from RHYTHMSYNC.utils.colored_buttons import (
     buttons_to_inline_markup,
     smart_edit_message_text as edit_message_text_colored,
     smart_edit_reply_markup as edit_reply_markup_colored,
+    smart_send_message as send_message_colored,  # ⭐ FIX: was missing -> NameError
     styled_button,
 )
 from config import BANNED_USERS, OWNER_ID
@@ -173,12 +174,9 @@ async def without_admin_rights(client, callback: CallbackQuery, _):
         current = await get_upvote_count(callback.message.chat.id)
         buttons = vote_mode_markup(_, current, mode)
     try:
-        result = await edit_reply_markup_colored(callback.message.chat.id, callback.message.id, reply_markup=buttons)
-        # Fallback to Pyrogram if Bot API fails
-        if not result:
-            from RHYTHMSYNC.utils.colored_buttons import buttons_to_inline_markup
-            return await callback.message.edit_reply_markup(reply_markup=buttons_to_inline_markup(buttons))
-        return result
+        return await edit_reply_markup_colored(
+            callback.message.chat.id, callback.message.id, reply_markup=buttons
+        )
     except MessageNotModified:
         return
 
@@ -209,11 +207,9 @@ async def addition(client, callback: CallbackQuery, _):
         await set_upvotes(callback.message.chat.id, final)
     buttons = vote_mode_markup(_, final, True)
     try:
-        result = await edit_reply_markup_colored(callback.message.chat.id, callback.message.id, reply_markup=buttons)
-        if not result:
-            from RHYTHMSYNC.utils.colored_buttons import buttons_to_inline_markup
-            return await callback.message.edit_reply_markup(reply_markup=buttons_to_inline_markup(buttons))
-        return result
+        return await edit_reply_markup_colored(
+            callback.message.chat.id, callback.message.id, reply_markup=buttons
+        )
     except MessageNotModified:
         return
 
@@ -273,11 +269,9 @@ async def playmode_ans(client, callback: CallbackQuery, _):
         Group = True if not is_non_admin else None
         buttons = playmode_users_markup(_, Direct, Group, Playtype)
     try:
-        result = await edit_reply_markup_colored(callback.message.chat.id, callback.message.id, reply_markup=buttons)
-        if not result:
-            from RHYTHMSYNC.utils.colored_buttons import buttons_to_inline_markup
-            return await callback.message.edit_reply_markup(reply_markup=buttons_to_inline_markup(buttons))
-        return result
+        return await edit_reply_markup_colored(
+            callback.message.chat.id, callback.message.id, reply_markup=buttons
+        )
     except MessageNotModified:
         return
 
@@ -315,16 +309,15 @@ async def authusers_mar(client, callback: CallbackQuery, _):
                     continue
                 msg += f"{counter}➤ {user_name}[<code>{user_id}</code>]\n"
                 msg += f"   {_['auth_8']} {admin_name}[<code>{admin_id}</code>]\n\n"
-            from RHYTHMSYNC.utils.colored_buttons import styled_button
             upl = [[
                 styled_button(text=_["BACK_BUTTON"], callback_data="AU", style="primary"),
                 styled_button(text=_["CLOSE_BUTTON"], callback_data="close", style="danger"),
             ]]
-            result = await edit_message_text_colored(callback.message.chat.id, callback.message.id, msg, reply_markup=upl)
-            if not result:
-                from RHYTHMSYNC.utils.colored_buttons import buttons_to_inline_markup
-                await edit_message_text_colored(chat_id=callback.message.chat.id, message_id=callback.message.id, text=msg, reply_markup=upl)
-            return
+            # smart_edit_message_text already falls back to Pyrogram internally —
+            # no need to retry it manually here.
+            return await edit_message_text_colored(
+                callback.message.chat.id, callback.message.id, msg, reply_markup=upl
+            )
     try:
         await callback.answer(_["set_cb_3"], show_alert=True)
     except Exception:
@@ -338,11 +331,9 @@ async def authusers_mar(client, callback: CallbackQuery, _):
             await remove_nonadmin_chat(callback.message.chat.id)
             buttons = auth_users_markup(_, True)
     try:
-        result = await edit_reply_markup_colored(callback.message.chat.id, callback.message.id, reply_markup=buttons)
-        if not result:
-            from RHYTHMSYNC.utils.colored_buttons import buttons_to_inline_markup
-            return await callback.message.edit_reply_markup(reply_markup=buttons_to_inline_markup(buttons))
-        return result
+        return await edit_reply_markup_colored(
+            callback.message.chat.id, callback.message.id, reply_markup=buttons
+        )
     except MessageNotModified:
         return
 
@@ -365,11 +356,9 @@ async def vote_change(client, callback: CallbackQuery, _):
     current = await get_upvote_count(callback.message.chat.id)
     buttons = vote_mode_markup(_, current, mod)
     try:
-        result = await edit_reply_markup_colored(callback.message.chat.id, callback.message.id, reply_markup=buttons)
-        if not result:
-            from RHYTHMSYNC.utils.colored_buttons import buttons_to_inline_markup
-            return await callback.message.edit_reply_markup(reply_markup=buttons_to_inline_markup(buttons))
-        return result
+        return await edit_reply_markup_colored(
+            callback.message.chat.id, callback.message.id, reply_markup=buttons
+        )
     except MessageNotModified:
         return
 
