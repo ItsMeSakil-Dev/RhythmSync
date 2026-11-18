@@ -28,7 +28,7 @@ async def check_bots_command(client, message):
         await userbot.one.start()
 
     processing_msg = await message.reply_photo(
-        photo="https://files.catbox.moe/s8yhxr.jpg",
+        photo="https://i.imgur.com/I3paaU9.jpeg",
         caption="**ᴄʜᴇᴄᴋɪɴɢ ʙᴏᴛs sᴛᴀᴛs ᴀʟɪᴠᴇ ᴏʀ ᴅᴇᴀᴅ...**"
     )
 
