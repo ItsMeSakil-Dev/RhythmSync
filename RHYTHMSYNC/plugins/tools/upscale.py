@@ -5,107 +5,99 @@
 # ═══════════════════════════════════════════════════════════
 
 import os
+import urllib.parse
 import aiohttp
 import aiofiles
 
-from config import DEEP_API
+from PIL import Image, ImageFilter
+
 from RHYTHMSYNC import app
 from pyrogram import filters
 from pyrogram.types import Message
 
+# ─── Constants ────────────────────────────────────────────────────────────
 
-async def download_from_url(path: str, url: str) -> str:
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+# Pollinations AI — free, no API key required, supports HD generation
+POLLINATIONS_BASE = "https://image.pollinations.ai/prompt"
+
+# Max upscale factor to avoid huge files / memory issues
+MAX_UPSCALE_FACTOR = 2
+
+
+# ─── Helpers ──────────────────────────────────────────────────────────────
+
+async def download_file(url: str, save_path: str) -> str | None:
+    """Download a file from a URL and save it locally."""
+    os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
     async with aiohttp.ClientSession() as session:
-        async with session.get(url) as resp:
+        async with session.get(url, timeout=aiohttp.ClientTimeout(total=60)) as resp:
             if resp.status == 200:
-                async with aiofiles.open(path, mode="wb") as f:
+                async with aiofiles.open(save_path, "wb") as f:
                     await f.write(await resp.read())
-                return path
+                return save_path
     return None
 
 
-async def post_file(url: str, file_path: str, headers: dict):
-    async with aiohttp.ClientSession() as session:
-        with open(file_path, 'rb') as f:
-            form = aiohttp.FormData()
-            form.add_field('image', f, filename=os.path.basename(file_path), content_type='application/octet-stream')
-
-            async with session.post(url, data=form, headers=headers) as resp:
-                return await resp.json()
-
-
-async def post_data(url: str, data: dict, headers: dict):
-    async with aiohttp.ClientSession() as session:
-        async with session.post(url, data=data, headers=headers) as resp:
-            return await resp.json()
-
-
-def extract_image_url(resp: dict):
+def local_upscale(input_path: str, output_path: str, factor: int = MAX_UPSCALE_FACTOR) -> str:
     """
-    DeepAI responses can come back in two shapes depending on the
-    endpoint/version:
-      1) {"output_url": "https://..."}
-      2) {"image_url": {"url": "https://..."}}  (nested S3 url)
-    This helper safely pulls the actual URL out of either shape.
+    Upscale an image locally using high-quality Lanczos resampling
+    plus a light sharpening pass to improve perceived detail.
+    This runs instantly, has zero external dependencies, and never fails
+    due to third-party API downtime or rate limits.
     """
-    if not resp:
-        return None
+    with Image.open(input_path) as img:
+        img = img.convert("RGB")
+        new_size = (img.width * factor, img.height * factor)
+        upscaled = img.resize(new_size, Image.LANCZOS)
+        # Light sharpening pass to compensate for softness introduced by resizing
+        upscaled = upscaled.filter(ImageFilter.UnsharpMask(radius=2, percent=120, threshold=3))
+        upscaled.save(output_path, quality=95)
+    return output_path
 
-    # Shape 1 — flat key
-    url = resp.get("output_url")
-    if url:
-        return url
 
-    # Shape 2 — nested dict
-    nested = resp.get("image_url")
-    if isinstance(nested, dict):
-        return nested.get("url")
-    if isinstance(nested, str):
-        return nested
+def build_pollinations_url(prompt: str) -> str:
+    """Build a Pollinations AI image-generation URL for the given prompt."""
+    encoded_prompt = urllib.parse.quote(prompt)
+    params = "width=1024&height=1024&nologo=true&enhance=true&model=flux"
+    return f"{POLLINATIONS_BASE}/{encoded_prompt}?{params}"
 
-    return None
 
+# ─── Commands ─────────────────────────────────────────────────────────────
 
 @app.on_message(filters.command("upscale"))
 async def upscale_image(_, message: Message):
-    if not DEEP_API:
-        return await message.reply_text("🚫 Missing DeepAI API key.")
-
     reply = message.reply_to_message
     if not reply or not reply.photo:
         return await message.reply_text("📎 Please reply to an image.")
 
     status = await message.reply_text("🔄 Upscaling image...")
 
+    local_path = None
+    output_path = None
     try:
         local_path = await reply.download()
-        resp = await post_file(
-            "https://api.deepai.org/api/torch-srgan",
-            local_path,
-            headers={'api-key': DEEP_API}
-        )
+        output_path = f"{local_path}_upscaled.png"
 
-        image_url = extract_image_url(resp)
-        if not image_url:
-            return await status.edit(f"❌ Upscale request failed.\n`{resp}`")
-
-        final_path = await download_from_url(local_path, image_url)
-        if not final_path:
-            return await status.edit("❌ Could not download result.")
+        local_upscale(local_path, output_path)
 
         await status.delete()
-        await message.reply_document(final_path)
+        await message.reply_document(
+            output_path,
+            caption="✅ Upscaled successfully."
+        )
 
     except Exception as e:
         await status.edit(f"⚠️ Error: `{str(e)}`")
 
+    finally:
+        # Clean up temp files
+        for path in (local_path, output_path):
+            if path and os.path.exists(path):
+                os.remove(path)
+
 
 @app.on_message(filters.command(["getdraw", "image"]))
 async def draw_image(_, message: Message):
-    if not DEEP_API:
-        return await message.reply_text("🚫 DeepAI API key is missing.")
-
     reply = message.reply_to_message
     query = None
 
@@ -124,22 +116,18 @@ async def draw_image(_, message: Message):
     temp_path = f"cache/{user_id}_{chat_id}_{message.id}.png"
 
     try:
-        resp = await post_data(
-            "https://api.deepai.org/api/text2img",
-            data={'text': query, 'grid_size': '1', 'image_generator_version': 'hd'},
-            headers={'api-key': DEEP_API}
-        )
+        url = build_pollinations_url(query)
+        final_path = await download_file(url, temp_path)
 
-        image_url = extract_image_url(resp)
-        if not image_url:
-            return await status.edit(f"❌ Failed to generate image.\n`{resp}`")
-
-        final_path = await download_from_url(temp_path, image_url)
         if not final_path:
-            return await status.edit("❌ Error downloading image.")
+            return await status.edit("❌ Failed to generate image.")
 
         await status.delete()
         await message.reply_photo(final_path, caption=f"`{query}`")
 
     except Exception as e:
         await status.edit(f"⚠️ Error: `{str(e)}`")
+
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
