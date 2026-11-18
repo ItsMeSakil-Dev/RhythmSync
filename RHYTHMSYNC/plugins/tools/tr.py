@@ -6,6 +6,8 @@
 
 import os
 import tempfile
+import asyncio
+import random
 
 import aiohttp
 
@@ -20,11 +22,20 @@ from RHYTHMSYNC import app
 
 # ─── Constants ────────────────────────────────────────────────────────────
 
-GTX_URL = "https://translate.googleapis.com/translate_a/single"
+# Two Google mirrors — if one rate-limits (429), try the other before giving up
+GOOGLE_MIRRORS = [
+    "https://translate.googleapis.com/translate_a/single",
+    "https://clients5.google.com/translate_a/t",
+]
 MYMEMORY_URL = "https://api.mymemory.translated.net/get"
 MAX_CHUNK = 1500
+MAX_RETRIES = 3
 
-# Buttons shown to the user
+# Throttle: only N translate requests in-flight at once across the whole bot.
+# This prevents bursts (e.g. 3 users hitting /tr at the same second) from
+# tripping Google's rate limiter in the first place.
+_THROTTLE = asyncio.Semaphore(2)
+
 LANGUAGES = {
     "en": "🇬🇧 English",
     "bn": "🇧🇩 Bengali",
@@ -37,7 +48,6 @@ LANGUAGES = {
 # ─── Low-level translation helpers ────────────────────────────────────────
 
 def _chunk(text: str, size: int = MAX_CHUNK) -> list[str]:
-    """Split long text into safe chunks (Google rejects very long q params)."""
     if len(text) <= size:
         return [text]
     chunks, current = [], ""
@@ -56,9 +66,11 @@ def _chunk(text: str, size: int = MAX_CHUNK) -> list[str]:
     return chunks or [text[:size]]
 
 
-async def _google_translate(session, text: str, source: str, target: str):
+async def _google_translate_once(session, mirror: str, text: str, source: str, target: str):
     params = {"client": "gtx", "sl": source, "tl": target, "dt": "t", "q": text}
-    async with session.get(GTX_URL, params=params) as resp:
+    async with session.get(mirror, params=params) as resp:
+        if resp.status == 429:
+            raise ConnectionRefusedError("rate_limited")
         if resp.status != 200:
             raise RuntimeError(f"HTTP {resp.status}")
         data = await resp.json(content_type=None)
@@ -70,6 +82,25 @@ async def _google_translate(session, text: str, source: str, target: str):
     if not translated:
         raise RuntimeError("empty translation")
     return translated, detected
+
+
+async def _google_translate(session, text: str, source: str, target: str):
+    """Try all mirrors, with retry + exponential backoff on rate limits."""
+    last_error = None
+    for attempt in range(MAX_RETRIES):
+        for mirror in GOOGLE_MIRRORS:
+            try:
+                async with _THROTTLE:
+                    return await _google_translate_once(session, mirror, text, source, target)
+            except ConnectionRefusedError:
+                last_error = "rate_limited"
+                continue  # try next mirror immediately
+            except Exception as e:
+                last_error = str(e)
+                continue
+        # All mirrors failed this round — back off before retrying
+        await asyncio.sleep((2 ** attempt) + random.uniform(0, 0.5))
+    raise RuntimeError(last_error or "google_translate_failed")
 
 
 async def _mymemory_translate(session, text: str, source: str, target: str):
@@ -86,16 +117,19 @@ async def _mymemory_translate(session, text: str, source: str, target: str):
 
 
 async def do_translate(text: str, target: str, source: str = "auto"):
-    """Translate text (auto-chunked) with Google -> MyMemory fallback per chunk."""
+    """Translate text (auto-chunked), Google (with retries+mirrors) -> MyMemory fallback."""
     async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
         parts, detected = [], source
         for chunk in _chunk(text):
             try:
                 out, det = await _google_translate(session, chunk, source, target)
             except Exception:
-                out, det = await _mymemory_translate(
-                    session, chunk, "auto" if source == "auto" else source, target
-                )
+                try:
+                    out, det = await _mymemory_translate(
+                        session, chunk, "auto" if source == "auto" else source, target
+                    )
+                except Exception:
+                    raise RuntimeError("All translation services are busy. Please try again shortly.")
             parts.append(out)
             if det and det != "auto":
                 detected = det
@@ -103,17 +137,12 @@ async def do_translate(text: str, target: str, source: str = "auto"):
 
 
 def romanize_hindi(text: str) -> str:
-    """
-    Convert Devanagari Hindi text to Roman script (Hinglish-style) using an
-    offline transliteration library. No network call -> never fails due to
-    API downtime.
-    """
     try:
         from indic_transliteration import sanscript
         from indic_transliteration.sanscript import transliterate
         return transliterate(text, sanscript.DEVANAGARI, sanscript.ITRANS)
     except Exception:
-        return text  # if library missing/fails, just show Hindi as-is
+        return text
 
 
 def write_temp(text: str) -> str:
@@ -145,7 +174,6 @@ async def translate_cmd(_, message: Message):
     args = message.text.split(maxsplit=1)
     arg_text = args[1].strip() if len(args) > 1 else ""
 
-    # ── Power-user mode: /tr source//target (reply required, no buttons) ──
     if "//" in arg_text and reply and (reply.text or reply.caption):
         source_lang, target_lang = [p.strip().lower() for p in arg_text.split("//", 1)]
         source_lang = source_lang or "auto"
@@ -165,7 +193,6 @@ async def translate_cmd(_, message: Message):
         await message.reply_document(path, caption=f"🌐 `{detected}` ➜ `{target_lang}`")
         return os.remove(path)
 
-    # ── Button mode: /tr (reply) or /tr <text> ──────────────────────────
     if reply and (reply.text or reply.caption):
         anchor_id, flag = reply.id, "r"
     elif arg_text:
@@ -232,7 +259,6 @@ async def translate_callback(client, callback_query: CallbackQuery):
         await callback_query.message.reply_document(path, caption=f"🌐 {display_lang}")
         os.remove(path)
     else:
-        # Keep the same keyboard so the user can try another language too
         await callback_query.message.edit_text(
             text, reply_markup=callback_query.message.reply_markup
         )
