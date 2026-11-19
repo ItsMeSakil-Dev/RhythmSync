@@ -3,7 +3,9 @@
 #   GɪᴛHᴜʙ : github.com/SunloMusicOfficial/RhythmSync
 #   Dᴇᴠʟᴏᴘᴇʀ : @YO_UR_OFFICIAL_CRUSH | Telegram
 # ═══════════════════════════════════════════════════════════
-#  /info | /whois | /userinfo  —  Premium user intelligence card
+#  /info | /whois | /userinfo — Premium card + rich-coloured buttons
+#  Colour rendering delegated 100% to utils/colored_buttons.py
+#  (raw Bot API bridge — Kurigram itself can't send the `style` field)
 # ═══════════════════════════════════════════════════════════
 
 import html
@@ -11,14 +13,16 @@ from datetime import datetime, timezone
 
 from pyrogram import enums, filters
 from pyrogram.errors import RPCError
-from pyrogram.types import (
-    CallbackQuery,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    Message,
-)
+from pyrogram.types import CallbackQuery, Message
 
 from RHYTHMSYNC import app
+from RHYTHMSYNC.utils.colored_buttons import (
+    styled_button,
+    smart_send_photo,
+    smart_send_message,
+    smart_edit_message_text,
+    smart_edit_message_caption,
+)
 
 MAX_CAPTION = 1024
 MAX_TEXT = 4096
@@ -53,6 +57,8 @@ BADGES = [
 ]
 
 
+# ─── Helpers ──────────────────────────────────────────────────────────────
+
 def _esc(value) -> str:
     if value is None:
         return "—"
@@ -70,17 +76,13 @@ def _human_delta(dt) -> str:
         return ""
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
-
     seconds = int((datetime.now(timezone.utc) - dt).total_seconds())
     if seconds < 0:
         return "in the future"
     if seconds < 60:
         return "just now"
-
-    units = [
-        (31536000, "yr"), (2592000, "mo"), (604800, "wk"),
-        (86400, "d"), (3600, "h"), (60, "m"),
-    ]
+    units = [(31536000, "yr"), (2592000, "mo"), (604800, "wk"),
+             (86400, "d"), (3600, "h"), (60, "m")]
     parts = []
     for size, label in units:
         qty, seconds = divmod(seconds, size)
@@ -110,41 +112,32 @@ async def _safe(coro, default=None):
         return default
 
 
-# ─── Profile photo (FIXED) ────────────────────────────────────────────────
-
-async def _fetch_photo(client, user):
+async def _fetch_photo(client, user) -> bytes | None:
     photo = getattr(user, "photo", None)
     if not photo:
         return None
     try:
-        data = await client.download_media(photo.big_file_id, in_memory=True)
-        if data is None:
-            return None
-        # Pyrogram needs a file-like object WITH a .name attribute
-        data.name = f"{user.id}.jpg"
-        data.seek(0)
-        return data
+        buf = await client.download_media(photo.big_file_id, in_memory=True)
+        return buf.getvalue() if buf else None
     except Exception:
         return None
 
 
-# ─── The card builder ─────────────────────────────────────────────────────
+# ─── Card text builder ─────────────────────────────────────────────────────
 
 async def build_card(client, user, chat) -> str:
     name = _esc(user.first_name) + (
         f" {_esc(user.last_name)}" if user.last_name else ""
     )
     username = f"@{_esc(user.username)}" if user.username else "—"
-
-    active = [label for attr, label in BADGES if getattr(user, attr, False)]
-    badges = " • ".join(active) if active else "—"
+    badges = " • ".join(l for a, l in BADGES if getattr(user, a, False)) or "—"
 
     status = getattr(user, "status", None)
-    status_key = getattr(status, "name", None) if status else None
-    presence = STATUS_ICONS.get(status_key, "🔒 Hidden")
-    seen_dt = getattr(status, "date", None) if status else None
-    if seen_dt:
-        presence += f" • {_human_delta(seen_dt)}"
+    key = getattr(status, "name", None) if status else None
+    presence = STATUS_ICONS.get(key, "🔒 Hidden")
+    seen = getattr(status, "date", None) if status else None
+    if seen:
+        presence += f" • {_human_delta(seen)}"
 
     rows = [
         "<blockquote>👤 <b>ᴜsᴇʀ ɪɴꜰᴏʀᴍᴀᴛɪᴏɴ ᴄᴀʀᴅ</b></blockquote>",
@@ -164,120 +157,110 @@ async def build_card(client, user, chat) -> str:
         rows += ["", "<b>❖ ʙɪᴏ</b>", f"<blockquote>{_esc(bio)}</blockquote>"]
 
     if chat is not None and getattr(chat, "type", None) in (
-        enums.ChatType.GROUP,
-        enums.ChatType.SUPERGROUP,
+        enums.ChatType.GROUP, enums.ChatType.SUPERGROUP,
     ):
-        member = await _safe(
-            client.get_chat_member(chat.id, user.id), default=None
-        )
+        member = await _safe(client.get_chat_member(chat.id, user.id))
         if member:
             m_key = getattr(member.status, "name", None)
-            rows += [
-                "",
-                "<blockquote>🏷 <b>ᴄʜᴀᴛ ᴄᴏɴᴛᴇxᴛ</b></blockquote>",
-                f"<b>❖ ʀᴀɴᴋ</b> : {MEMBER_LABELS.get(m_key, _esc(m_key))}",
-            ]
+            rows += ["", "<blockquote>🏷 <b>ᴄʜᴀᴛ ᴄᴏɴᴛᴇxᴛ</b></blockquote>",
+                     f"<b>❖ ʀᴀɴᴋ</b> : {MEMBER_LABELS.get(m_key, _esc(m_key))}"]
             title = getattr(member, "custom_title", None)
             if title:
                 rows.append(f"<b>❖ ᴛɪᴛʟᴇ</b> : {_esc(title)}")
             joined = getattr(member, "joined_date", None)
             if joined:
-                rows.append(
-                    f"<b>❖ ᴊᴏɪɴᴇᴅ</b> : {_fmt_dt(joined)} "
-                    f"({_human_delta(joined)})"
-                )
+                rows.append(f"<b>❖ ᴊᴏɪɴᴇᴅ</b> : {_fmt_dt(joined)} "
+                            f"({_human_delta(joined)})")
             priv = getattr(member, "privileges", None)
             if priv and m_key == "ADMINISTRATOR":
-                rights = [
-                    key.replace("can_", "").replace("_", " ")
-                    for key in (
-                        "can_manage_chat", "can_delete_messages",
-                        "can_restrict_members", "can_promote_members",
-                        "can_pin_messages", "can_invite_users",
-                    )
-                    if getattr(priv, key, False)
-                ]
+                rights = [k.replace("can_", "").replace("_", " ") for k in (
+                    "can_manage_chat", "can_delete_messages",
+                    "can_restrict_members", "can_promote_members",
+                    "can_pin_messages", "can_invite_users",
+                ) if getattr(priv, k, False)]
                 if rights:
                     rows.append(f"<b>❖ ᴘᴇʀᴍs</b> : {', '.join(rights)}")
 
-    common = await _safe(client.get_common_chats(user.id), default=None)
+    common = await _safe(client.get_common_chats(user.id))
     if common:
-        rows += [
-            "",
-            f"<blockquote>🤝 <b>ᴄᴏᴍᴍᴏɴ ᴄʜᴀᴛs</b> — {len(common)}</blockquote>",
-        ]
+        rows += ["", f"<blockquote>🤝 <b>ᴄᴏᴍᴍᴏɴ ᴄʜᴀᴛs</b> — {len(common)}</blockquote>"]
         for item in common[:5]:
             label = _esc(getattr(item, "title", None) or item.id)
             if getattr(item, "username", None):
-                rows.append(
-                    f' • <a href="https://t.me/{item.username}">{label}</a>'
-                )
+                rows.append(f' • <a href="https://t.me/{item.username}">{label}</a>')
             else:
                 rows.append(f" • {label}")
         if len(common) > 5:
             rows.append(f" • <i>+{len(common) - 5} more…</i>")
 
-    rows += [
-        "",
-        f"<i>⚡ queried at {_fmt_dt(datetime.now(timezone.utc)).split(',')[1].strip()}</i>",
-    ]
+    rows += ["", f"<i>⚡ queried at "
+                 f"{_fmt_dt(datetime.now(timezone.utc)).split(',')[1].strip()}</i>"]
     return "\n".join(rows)
 
 
-def build_keyboard(user) -> InlineKeyboardMarkup:
+# ─── Coloured keyboard (uses project's own helper, NOT raw Pyrogram) ───────
+
+def build_keyboard(user):
+    """
+    Returns a list-of-rows of `styled_button(...)` objects.
+    `style`: "primary" = blue · "success" = green · "danger" = red.
+    """
     row1 = [
-        InlineKeyboardButton("🔄 ʀᴇꜰʀᴇsʜ", callback_data=f"ui|rf|{user.id}"),
-        InlineKeyboardButton("📋 ᴄᴏᴘʏ ɪᴅ", callback_data=f"ui|cp|{user.id}"),
+        styled_button("🔄 ʀᴇꜰʀᴇsʜ", callback_data=f"ui|rf|{user.id}", style="primary"),
+        styled_button("📋 ᴄᴏᴘʏ ɪᴅ", callback_data=f"ui|cp|{user.id}", style="primary"),
     ]
     rows = [row1]
     if user.username:
         rows.append([
-            InlineKeyboardButton(
-                "👤 ᴏᴘᴇɴ ᴘʀᴏꜰɪʟᴇ", url=f"https://t.me/{user.username}"
+            styled_button(
+                "👤 ᴏᴘᴇɴ ᴘʀᴏꜰɪʟᴇ",
+                url=f"https://t.me/{user.username}",
+                style="success",
             )
         ])
-    rows.append([InlineKeyboardButton("✖️ ᴄʟᴏsᴇ", callback_data="ui|cl")])
-    return InlineKeyboardMarkup(rows)
+    rows.append([styled_button("✖️ ᴄʟᴏsᴇ", callback_data="ui|cl", style="danger")])
+    return rows
 
+
+# ─── Sending (delegated to smart_send_*) ───────────────────────────────────
 
 async def send_card(client, message: Message, user, chat):
     text = await build_card(client, user, chat)
-    keyboard = build_keyboard(user)
+    buttons = build_keyboard(user)
     photo = await _fetch_photo(client, user)
 
-    if photo:
-        if len(text) <= MAX_CAPTION:
-            try:
-                return await message.reply_photo(
-                    photo, caption=text, parse_mode=HTML, reply_markup=keyboard
-                )
-            except Exception:
-                pass  # fall through to text-only below
-        else:
-            try:
-                await message.reply_photo(
-                    photo,
-                    caption=f"👤 <b>{_esc(user.first_name)}</b> • "
-                            f"<code>{user.id}</code>",
-                    parse_mode=HTML,
-                )
-            except Exception:
-                pass
-            return await message.reply_text(
-                text[:MAX_TEXT], parse_mode=HTML, reply_markup=keyboard,
-                disable_web_page_preview=True,
-            )
+    if photo and len(text) <= MAX_CAPTION:
+        sent = await smart_send_photo(
+            message,
+            photo=photo,
+            caption=text,
+            parse_mode="HTML",
+            buttons=buttons,
+        )
+        if sent:
+            return
 
-    return await message.reply_text(
-        text[:MAX_TEXT], parse_mode=HTML, reply_markup=keyboard,
-        disable_web_page_preview=True,
+    if photo:
+        await smart_send_photo(
+            message,
+            photo=photo,
+            caption=f"👤 <b>{_esc(user.first_name)}</b> • <code>{user.id}</code>",
+            parse_mode="HTML",
+        )
+
+    await smart_send_message(
+        message,
+        text=text[:MAX_TEXT],
+        parse_mode="HTML",
+        buttons=buttons,
     )
 
+
+# ─── /info | /whois | /userinfo ───────────────────────────────────────────
 
 @app.on_message(filters.command(["info", "whois", "userinfo"]))
 async def info_cmd(client, message: Message):
     await message.reply_chat_action(enums.ChatAction.TYPING)
-
     try:
         reply = message.reply_to_message
 
@@ -296,9 +279,7 @@ async def info_cmd(client, message: Message):
         elif len(message.command) > 1:
             raw = _parse_target(" ".join(message.command[1:]))
             try:
-                target = await client.get_users(
-                    int(raw) if raw.isdigit() else raw
-                )
+                target = await client.get_users(int(raw) if raw.isdigit() else raw)
             except (RPCError, ValueError):
                 return await message.reply_text(
                     "❌ <b>User not found.</b>\n"
@@ -309,9 +290,7 @@ async def info_cmd(client, message: Message):
         else:
             target = message.from_user
             if target is None:
-                return await message.reply_text(
-                    "❌ Couldn't identify the sender.", parse_mode=HTML
-                )
+                return await message.reply_text("❌ Couldn't identify the sender.")
 
         await send_card(client, message, target, message.chat)
 
@@ -321,6 +300,8 @@ async def info_cmd(client, message: Message):
             parse_mode=HTML,
         )
 
+
+# ─── Callbacks ─────────────────────────────────────────────────────────────
 
 @app.on_callback_query(filters.regex(r"^ui\|"))
 async def info_callback(client, cb: CallbackQuery):
@@ -339,26 +320,23 @@ async def info_callback(client, cb: CallbackQuery):
 
         if action == "rf":
             await cb.answer("Refreshing…")
-            user = await _safe(client.get_users(user_id), default=None)
+            user = await _safe(client.get_users(user_id))
             if user is None:
                 return await cb.answer("User no longer reachable.", show_alert=True)
 
             text = await build_card(client, user, cb.message.chat)
-            keyboard = build_keyboard(user)
+            buttons = build_keyboard(user)
 
-            try:
-                if cb.message.caption is not None:
-                    await cb.message.edit_caption(
-                        text[:MAX_CAPTION], parse_mode=HTML, reply_markup=keyboard
-                    )
-                else:
-                    await cb.message.edit_text(
-                        text[:MAX_TEXT], parse_mode=HTML,
-                        reply_markup=keyboard,
-                        disable_web_page_preview=True,
-                    )
-            except Exception:
-                await cb.answer("Nothing changed.", show_alert=False)
+            if cb.message.caption is not None:
+                await smart_edit_message_caption(
+                    cb.message, caption=text[:MAX_CAPTION],
+                    parse_mode="HTML", buttons=buttons,
+                )
+            else:
+                await smart_edit_message_text(
+                    cb.message, text=text[:MAX_TEXT],
+                    parse_mode="HTML", buttons=buttons,
+                )
 
     except Exception as e:
         await cb.answer(f"Error: {type(e).__name__}", show_alert=True)
