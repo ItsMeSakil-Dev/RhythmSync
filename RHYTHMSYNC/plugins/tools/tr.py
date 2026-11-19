@@ -5,9 +5,11 @@
 # ═══════════════════════════════════════════════════════════
 
 import os
-import tempfile
-import asyncio
+import time
 import random
+import asyncio
+import tempfile
+import urllib.parse
 
 import aiohttp
 
@@ -20,21 +22,31 @@ from pyrogram.types import (
 )
 from RHYTHMSYNC import app
 
-# ─── Constants ────────────────────────────────────────────────────────────
+# ─── Provider endpoints ───────────────────────────────────────────────────
 
-# Two Google mirrors — if one rate-limits (429), try the other before giving up
-GOOGLE_MIRRORS = [
-    "https://translate.googleapis.com/translate_a/single",
-    "https://clients5.google.com/translate_a/t",
+GOOGLE_URL = "https://translate.googleapis.com/translate_a/single"
+
+# Public Lingva instances (free Google frontends built for programmatic use,
+# much more tolerant than hitting googleapis directly from a shared IP)
+LINGVA_INSTANCES = [
+    "https://lingva.ml",
+    "https://lingva.garudalinux.org",
+    "https://translate.plausibility.cloud",
 ]
-MYMEMORY_URL = "https://api.mymemory.translated.net/get"
-MAX_CHUNK = 1500
-MAX_RETRIES = 3
 
-# Throttle: only N translate requests in-flight at once across the whole bot.
-# This prevents bursts (e.g. 3 users hitting /tr at the same second) from
-# tripping Google's rate limiter in the first place.
-_THROTTLE = asyncio.Semaphore(2)
+MYMEMORY_URL = "https://api.mymemory.translated.net/get"
+
+# Last-resort free LLM endpoint (same provider already used for /image)
+POLLINATIONS_TEXT = "https://text.pollinations.ai"
+
+MAX_CHUNK = 1500
+
+# Only N translation requests in flight bot-wide
+_THROTTLE = asyncio.Semaphore(3)
+
+# Simple in-memory cache: (text, source, target) -> (result, detected)
+_CACHE: dict[tuple[str, str, str], tuple[str, str]] = {}
+_CACHE_MAX = 500
 
 LANGUAGES = {
     "en": "🇬🇧 English",
@@ -44,8 +56,16 @@ LANGUAGES = {
     "hin": "🔤 Hinglish",
 }
 
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/json,text/plain,*/*",
+}
 
-# ─── Low-level translation helpers ────────────────────────────────────────
+
+# ─── Utilities ────────────────────────────────────────────────────────────
 
 def _chunk(text: str, size: int = MAX_CHUNK) -> list[str]:
     if len(text) <= size:
@@ -66,74 +86,153 @@ def _chunk(text: str, size: int = MAX_CHUNK) -> list[str]:
     return chunks or [text[:size]]
 
 
-async def _google_translate_once(session, mirror: str, text: str, source: str, target: str):
-    params = {"client": "gtx", "sl": source, "tl": target, "dt": "t", "q": text}
-    async with session.get(mirror, params=params) as resp:
-        if resp.status == 429:
-            raise ConnectionRefusedError("rate_limited")
+def _cache_get(key):
+    return _CACHE.get(key)
+
+
+def _cache_put(key, value):
+    if len(_CACHE) >= _CACHE_MAX:
+        _CACHE.pop(next(iter(_CACHE)))
+    _CACHE[key] = value
+
+
+def write_temp(text: str) -> str:
+    path = os.path.join(tempfile.gettempdir(), "translation.txt")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
+    return path
+
+
+# ─── Provider 1: Google gtx (dj=1 → clean JSON) ───────────────────────────
+
+async def _google(session, text, source, target):
+    params = {
+        "client": "gtx",
+        "sl": source,
+        "tl": target,
+        "dt": "t",
+        "dj": "1",          # JSON response with "sentences" + "src"
+        "q": text,
+    }
+    async with session.get(GOOGLE_URL, params=params, headers=HEADERS) as resp:
         if resp.status != 200:
-            raise RuntimeError(f"HTTP {resp.status}")
+            raise RuntimeError(f"google HTTP {resp.status}")
         data = await resp.json(content_type=None)
 
-    segments = data[0] or []
-    translated = "".join(seg[0] for seg in segments if seg and seg[0])
-    detected = data[2] if len(data) > 2 and data[2] else source
-
+    translated = "".join(s.get("trans", "") for s in data.get("sentences", []))
     if not translated:
-        raise RuntimeError("empty translation")
-    return translated, detected
+        raise RuntimeError("google empty")
+    return translated, data.get("src") or source
 
 
-async def _google_translate(session, text: str, source: str, target: str):
-    """Try all mirrors, with retry + exponential backoff on rate limits."""
-    last_error = None
-    for attempt in range(MAX_RETRIES):
-        for mirror in GOOGLE_MIRRORS:
-            try:
-                async with _THROTTLE:
-                    return await _google_translate_once(session, mirror, text, source, target)
-            except ConnectionRefusedError:
-                last_error = "rate_limited"
-                continue  # try next mirror immediately
-            except Exception as e:
-                last_error = str(e)
+# ─── Provider 2: Lingva instances ─────────────────────────────────────────
+
+async def _lingva(session, text, source, target):
+    src = "auto" if source == "auto" else source
+    path = urllib.parse.quote(text, safe="")
+    last = None
+    for base in LINGVA_INSTANCES:
+        try:
+            url = f"{base}/api/v1/{src}/{target}/{path}"
+            async with session.get(url, headers=HEADERS) as resp:
+                if resp.status != 200:
+                    last = f"lingva HTTP {resp.status}"
+                    continue
+                data = await resp.json(content_type=None)
+            translated = data.get("translation")
+            if not translated:
+                last = "lingva empty"
                 continue
-        # All mirrors failed this round — back off before retrying
-        await asyncio.sleep((2 ** attempt) + random.uniform(0, 0.5))
-    raise RuntimeError(last_error or "google_translate_failed")
+            return translated, data.get("info", {}).get("detectedSource") or source
+        except Exception as e:
+            last = str(e)
+            continue
+    raise RuntimeError(last or "lingva failed")
 
 
-async def _mymemory_translate(session, text: str, source: str, target: str):
+# ─── Provider 3: MyMemory (needs a REAL source code, not "auto") ──────────
+
+async def _mymemory(session, text, source, target):
+    if source == "auto":
+        raise RuntimeError("mymemory needs explicit source")
     params = {"q": text, "langpair": f"{source}|{target}"}
-    async with session.get(MYMEMORY_URL, params=params) as resp:
+    async with session.get(MYMEMORY_URL, params=params, headers=HEADERS) as resp:
         if resp.status != 200:
-            raise RuntimeError(f"HTTP {resp.status}")
+            raise RuntimeError(f"mymemory HTTP {resp.status}")
         data = await resp.json(content_type=None)
 
+    # MyMemory returns 200 + error text inside translatedText on bad langpairs
+    if data.get("responseStatus") != 200:
+        raise RuntimeError(data.get("responseDetails") or "mymemory rejected")
     translated = (data.get("responseData") or {}).get("translatedText")
     if not translated:
         raise RuntimeError("mymemory empty")
     return translated, source
 
 
+# ─── Provider 4: Pollinations text LLM (last resort, never blocks) ────────
+
+LANG_NAMES = {
+    "en": "English", "bn": "Bengali", "hi": "Hindi",
+    "ur": "Urdu", "hin": "Hinglish (Hindi written in Roman/Latin letters)",
+}
+
+async def _pollinations(session, text, source, target):
+    lang_name = LANG_NAMES.get(target, target)
+    prompt = (
+        f"Translate the text below into {lang_name}. "
+        f"Output ONLY the {lang_name} translation, no explanations, no quotes, "
+        f"no notes, no romanization unless the target is Hinglish.\n\n"
+        f"TEXT:\n{text}"
+    )
+    url = f"{POLLINATIONS_TEXT}/{urllib.parse.quote(prompt, safe='')}"
+    async with session.get(url, params={"model": "openai"}, headers=HEADERS) as resp:
+        if resp.status != 200:
+            raise RuntimeError(f"pollinations HTTP {resp.status}")
+        out = (await resp.text()).strip()
+    if not out:
+        raise RuntimeError("pollinations empty")
+    return out, source
+
+
+# ─── Provider chain ───────────────────────────────────────────────────────
+
+PROVIDERS_AUTO = [_google, _lingva, _pollinations]           # support "auto"
+PROVIDERS_FIXED = [_google, _lingva, _mymemory, _pollinations]
+
+
+async def _translate_chunk(session, text, source, target):
+    providers = PROVIDERS_AUTO if source == "auto" else PROVIDERS_FIXED
+    errors = []
+    for provider in providers:
+        try:
+            async with _THROTTLE:
+                return await provider(session, text, source, target)
+        except Exception as e:
+            errors.append(f"{provider.__name__}: {e}")
+            continue
+    raise RuntimeError(" | ".join(errors[-2:]) or "all providers failed")
+
+
 async def do_translate(text: str, target: str, source: str = "auto"):
-    """Translate text (auto-chunked), Google (with retries+mirrors) -> MyMemory fallback."""
-    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
+    key = (text, source, target)
+    cached = _cache_get(key)
+    if cached:
+        return cached
+
+    async with aiohttp.ClientSession(
+        timeout=aiohttp.ClientTimeout(total=45)
+    ) as session:
         parts, detected = [], source
         for chunk in _chunk(text):
-            try:
-                out, det = await _google_translate(session, chunk, source, target)
-            except Exception:
-                try:
-                    out, det = await _mymemory_translate(
-                        session, chunk, "auto" if source == "auto" else source, target
-                    )
-                except Exception:
-                    raise RuntimeError("All translation services are busy. Please try again shortly.")
+            out, det = await _translate_chunk(session, chunk, source, target)
             parts.append(out)
             if det and det != "auto":
                 detected = det
-        return "\n".join(parts), detected
+
+    result = "\n".join(parts)
+    _cache_put(key, (result, detected))
+    return result, detected
 
 
 def romanize_hindi(text: str) -> str:
@@ -145,14 +244,7 @@ def romanize_hindi(text: str) -> str:
         return text
 
 
-def write_temp(text: str) -> str:
-    path = os.path.join(tempfile.gettempdir(), "translation.txt")
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(text)
-    return path
-
-
-# ─── Keyboard builder ─────────────────────────────────────────────────────
+# ─── Keyboard ─────────────────────────────────────────────────────────────
 
 def build_keyboard(anchor_id: int, flag: str) -> InlineKeyboardMarkup:
     buttons, row = [], []
@@ -174,6 +266,7 @@ async def translate_cmd(_, message: Message):
     args = message.text.split(maxsplit=1)
     arg_text = args[1].strip() if len(args) > 1 else ""
 
+    # Power-user: /tr en//hi (reply required, no buttons)
     if "//" in arg_text and reply and (reply.text or reply.caption):
         source_lang, target_lang = [p.strip().lower() for p in arg_text.split("//", 1)]
         source_lang = source_lang or "auto"
@@ -183,7 +276,7 @@ async def translate_cmd(_, message: Message):
         try:
             result, detected = await do_translate(content, target_lang, source_lang)
         except Exception as e:
-            return await status.edit(f"❌ ᴛʀᴀɴsʟᴀᴛɪᴏɴ ꜰᴀɪʟᴇᴅ: `{e}`")
+            return await status.edit(f"❌ ᴛʀᴀɴsʟᴀᴛɪᴏɴ ꜰᴀɪʟᴇᴅ:\n`{e}`")
 
         text = f"🌐 **ᴛʀᴀɴsʟᴀᴛᴇᴅ:** `{detected}` ➜ `{target_lang}`\n\n{result}"
         if len(text) <= 4096:
@@ -208,7 +301,7 @@ async def translate_cmd(_, message: Message):
     )
 
 
-# ─── Callback: button clicks ────────────────────────────────────────────
+# ─── Callback ─────────────────────────────────────────────────────────────
 
 @app.on_callback_query(filters.regex(r"^tr\|"))
 async def translate_callback(client, callback_query: CallbackQuery):
@@ -223,33 +316,31 @@ async def translate_callback(client, callback_query: CallbackQuery):
     try:
         anchor = await client.get_messages(callback_query.message.chat.id, anchor_id)
         if not anchor:
-            raise ValueError("Original message was deleted.")
-
+            raise ValueError("original message deleted")
         raw = anchor.text or anchor.caption
         if not raw:
-            raise ValueError("No text found in the original message.")
+            raise ValueError("no text in original message")
 
         if flag == "c":
             parts = raw.split(maxsplit=1)
             content = parts[1] if len(parts) > 1 else ""
             if not content:
-                raise ValueError("No text found to translate.")
+                raise ValueError("no text to translate")
         else:
             content = raw
-
     except Exception as e:
-        return await callback_query.message.edit_text(f"❌ Couldn't fetch original text: `{e}`")
+        return await callback_query.message.edit_text(f"❌ {e}")
 
     try:
         if lang == "hin":
             hindi_text, detected = await do_translate(content, "hi")
-            display_lang = "🔤 Hinglish"
+            display_lang = LANGUAGES["hin"]
             result = romanize_hindi(hindi_text)
         else:
             result, detected = await do_translate(content, lang)
             display_lang = LANGUAGES.get(lang, lang)
     except Exception as e:
-        return await callback_query.message.edit_text(f"❌ ᴛʀᴀɴsʟᴀᴛɪᴏɴ ꜰᴀɪʟᴇᴅ: `{e}`")
+        return await callback_query.message.edit_text(f"❌ ᴛʀᴀɴsʟᴀᴛɪᴏɴ ꜰᴀɪʟᴇᴅ:\n`{e}`")
 
     text = f"🌐 **{display_lang}** (from `{detected}`):\n\n{result}"
 
