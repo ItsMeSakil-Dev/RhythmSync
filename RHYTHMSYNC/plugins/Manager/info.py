@@ -24,8 +24,6 @@ MAX_CAPTION = 1024
 MAX_TEXT = 4096
 HTML = enums.ParseMode.HTML
 
-# ─── Status / member lookup tables ────────────────────────────────────────
-
 STATUS_ICONS = {
     "ONLINE": "🟢 Online",
     "OFFLINE": "⚪️ Offline",
@@ -55,10 +53,7 @@ BADGES = [
 ]
 
 
-# ─── Small helpers ────────────────────────────────────────────────────────
-
 def _esc(value) -> str:
-    """HTML-escape anything that may contain < > & (names, bios, titles)."""
     if value is None:
         return "—"
     return html.escape(str(value), quote=False)
@@ -71,7 +66,6 @@ def _fmt_dt(dt) -> str:
 
 
 def _human_delta(dt) -> str:
-    """Turn a past datetime into '2 yrs 3 mo ago' style text."""
     if not isinstance(dt, datetime):
         return ""
     if dt.tzinfo is None:
@@ -98,7 +92,6 @@ def _human_delta(dt) -> str:
 
 
 def _parse_target(raw: str) -> str:
-    """Accept @name, name, t.me/name, tg://user?id=123, or a plain ID."""
     target = (raw or "").strip()
     for prefix in ("https://", "http://"):
         if target.startswith(prefix):
@@ -111,14 +104,13 @@ def _parse_target(raw: str) -> str:
 
 
 async def _safe(coro, default=None):
-    """Await something that is allowed to fail (privacy, flood, perms)."""
     try:
         return await coro
     except Exception:
         return default
 
 
-# ─── Profile photo ────────────────────────────────────────────────────────
+# ─── Profile photo (FIXED) ────────────────────────────────────────────────
 
 async def _fetch_photo(client, user):
     photo = getattr(user, "photo", None)
@@ -128,7 +120,10 @@ async def _fetch_photo(client, user):
         data = await client.download_media(photo.big_file_id, in_memory=True)
         if data is None:
             return None
-        return data.getvalue() if hasattr(data, "getvalue") else data
+        # Pyrogram needs a file-like object WITH a .name attribute
+        data.name = f"{user.id}.jpg"
+        data.seek(0)
+        return data
     except Exception:
         return None
 
@@ -141,11 +136,9 @@ async def build_card(client, user, chat) -> str:
     )
     username = f"@{_esc(user.username)}" if user.username else "—"
 
-    # ── badges ───────────────────────────────────────────────────────────
     active = [label for attr, label in BADGES if getattr(user, attr, False)]
     badges = " • ".join(active) if active else "—"
 
-    # ── presence ─────────────────────────────────────────────────────────
     status = getattr(user, "status", None)
     status_key = getattr(status, "name", None) if status else None
     presence = STATUS_ICONS.get(status_key, "🔒 Hidden")
@@ -166,12 +159,10 @@ async def build_card(client, user, chat) -> str:
         f"<b>❖ ʙᴀᴅɢᴇs</b> : {badges}",
     ]
 
-    # ── bio (only exposed for some accounts) ─────────────────────────────
     bio = getattr(user, "bio", None)
     if bio:
         rows += ["", "<b>❖ ʙɪᴏ</b>", f"<blockquote>{_esc(bio)}</blockquote>"]
 
-    # ── membership in the current chat ───────────────────────────────────
     if chat is not None and getattr(chat, "type", None) in (
         enums.ChatType.GROUP,
         enums.ChatType.SUPERGROUP,
@@ -209,7 +200,6 @@ async def build_card(client, user, chat) -> str:
                 if rights:
                     rows.append(f"<b>❖ ᴘᴇʀᴍs</b> : {', '.join(rights)}")
 
-    # ── common chats ─────────────────────────────────────────────────────
     common = await _safe(client.get_common_chats(user.id), default=None)
     if common:
         rows += [
@@ -227,7 +217,6 @@ async def build_card(client, user, chat) -> str:
         if len(common) > 5:
             rows.append(f" • <i>+{len(common) - 5} more…</i>")
 
-    # ── footer ───────────────────────────────────────────────────────────
     rows += [
         "",
         f"<i>⚡ queried at {_fmt_dt(datetime.now(timezone.utc)).split(',')[1].strip()}</i>",
@@ -251,38 +240,39 @@ def build_keyboard(user) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
-# ─── Sending (photo + caption limit aware) ────────────────────────────────
-
-async def send_card(client, message: Message, user, chat, as_reply=True):
+async def send_card(client, message: Message, user, chat):
     text = await build_card(client, user, chat)
     keyboard = build_keyboard(user)
     photo = await _fetch_photo(client, user)
-    reply = message.reply_photo if as_reply else message.reply_photo
 
     if photo:
         if len(text) <= MAX_CAPTION:
-            return await reply(
-                photo, caption=text, parse_mode=HTML, reply_markup=keyboard
+            try:
+                return await message.reply_photo(
+                    photo, caption=text, parse_mode=HTML, reply_markup=keyboard
+                )
+            except Exception:
+                pass  # fall through to text-only below
+        else:
+            try:
+                await message.reply_photo(
+                    photo,
+                    caption=f"👤 <b>{_esc(user.first_name)}</b> • "
+                            f"<code>{user.id}</code>",
+                    parse_mode=HTML,
+                )
+            except Exception:
+                pass
+            return await message.reply_text(
+                text[:MAX_TEXT], parse_mode=HTML, reply_markup=keyboard,
+                disable_web_page_preview=True,
             )
-        # Caption limit exceeded → photo first, details second
-        await reply(
-            photo,
-            caption=f"👤 <b>{_esc(user.first_name)}</b> • "
-                    f"<code>{user.id}</code>",
-            parse_mode=HTML,
-        )
-        return await message.reply_text(
-            text[:MAX_TEXT], parse_mode=HTML, reply_markup=keyboard,
-            disable_web_page_preview=True,
-        )
 
     return await message.reply_text(
         text[:MAX_TEXT], parse_mode=HTML, reply_markup=keyboard,
         disable_web_page_preview=True,
     )
 
-
-# ─── /info | /whois | /userinfo ───────────────────────────────────────────
 
 @app.on_message(filters.command(["info", "whois", "userinfo"]))
 async def info_cmd(client, message: Message):
@@ -291,7 +281,6 @@ async def info_cmd(client, message: Message):
     try:
         reply = message.reply_to_message
 
-        # 1) reply → use that message's author
         if reply:
             target = reply.from_user or message.from_user
             if target is None:
@@ -304,7 +293,6 @@ async def info_cmd(client, message: Message):
                     parse_mode=HTML,
                 )
 
-        # 2) argument → resolve @user / id / link
         elif len(message.command) > 1:
             raw = _parse_target(" ".join(message.command[1:]))
             try:
@@ -318,7 +306,6 @@ async def info_cmd(client, message: Message):
                     parse_mode=HTML,
                 )
 
-        # 3) nothing → yourself
         else:
             target = message.from_user
             if target is None:
@@ -329,14 +316,11 @@ async def info_cmd(client, message: Message):
         await send_card(client, message, target, message.chat)
 
     except Exception as e:
-        # Surface the real reason instead of dying silently
         await message.reply_text(
             f"❌ <b>Info failed</b>\n<code>{type(e).__name__}: {_esc(e)}</code>",
             parse_mode=HTML,
         )
 
-
-# ─── Callback buttons ─────────────────────────────────────────────────────
 
 @app.on_callback_query(filters.regex(r"^ui\|"))
 async def info_callback(client, cb: CallbackQuery):
