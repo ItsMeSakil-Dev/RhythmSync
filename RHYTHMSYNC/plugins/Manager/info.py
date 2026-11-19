@@ -4,8 +4,7 @@
 #   Dᴇᴠʟᴏᴘᴇʀ : @YO_UR_OFFICIAL_CRUSH | Telegram
 # ═══════════════════════════════════════════════════════════
 #  /info | /whois | /userinfo — Premium card + rich-coloured buttons
-#  Colour rendering delegated 100% to utils/colored_buttons.py
-#  (raw Bot API bridge — Kurigram itself can't send the `style` field)
+#  Colour rendering delegated to utils/colored_buttons.py
 # ═══════════════════════════════════════════════════════════
 
 import html
@@ -112,15 +111,10 @@ async def _safe(coro, default=None):
         return default
 
 
-async def _fetch_photo(client, user) -> bytes | None:
+def _photo_id(user) -> str | None:
+    """Reuse the file_id directly — no need to download bytes at all."""
     photo = getattr(user, "photo", None)
-    if not photo:
-        return None
-    try:
-        buf = await client.download_media(photo.big_file_id, in_memory=True)
-        return buf.getvalue() if buf else None
-    except Exception:
-        return None
+    return getattr(photo, "big_file_id", None) if photo else None
 
 
 # ─── Card text builder ─────────────────────────────────────────────────────
@@ -198,13 +192,10 @@ async def build_card(client, user, chat) -> str:
     return "\n".join(rows)
 
 
-# ─── Coloured keyboard (uses project's own helper, NOT raw Pyrogram) ───────
+# ─── Coloured keyboard ──────────────────────────────────────────────────────
 
-def build_keyboard(user):
-    """
-    Returns a list-of-rows of `styled_button(...)` objects.
-    `style`: "primary" = blue · "success" = green · "danger" = red.
-    """
+def build_keyboard(user) -> list:
+    """List[List[Dict]] — exactly what the colored_buttons utils expect."""
     row1 = [
         styled_button("🔄 ʀᴇꜰʀᴇsʜ", callback_data=f"ui|rf|{user.id}", style="primary"),
         styled_button("📋 ᴄᴏᴘʏ ɪᴅ", callback_data=f"ui|cp|{user.id}", style="primary"),
@@ -222,37 +213,39 @@ def build_keyboard(user):
     return rows
 
 
-# ─── Sending (delegated to smart_send_*) ───────────────────────────────────
+# ─── Sending ────────────────────────────────────────────────────────────────
 
 async def send_card(client, message: Message, user, chat):
     text = await build_card(client, user, chat)
     buttons = build_keyboard(user)
-    photo = await _fetch_photo(client, user)
+    photo_id = _photo_id(user)
+    chat_id = message.chat.id
 
-    if photo and len(text) <= MAX_CAPTION:
+    if photo_id and len(text) <= MAX_CAPTION:
         sent = await smart_send_photo(
-            message,
-            photo=photo,
+            chat_id=chat_id,
+            photo=photo_id,
             caption=text,
             parse_mode="HTML",
-            buttons=buttons,
+            reply_markup=buttons,
         )
         if sent:
             return
 
-    if photo:
+    if photo_id:
         await smart_send_photo(
-            message,
-            photo=photo,
+            chat_id=chat_id,
+            photo=photo_id,
             caption=f"👤 <b>{_esc(user.first_name)}</b> • <code>{user.id}</code>",
             parse_mode="HTML",
         )
 
     await smart_send_message(
-        message,
+        chat_id=chat_id,
         text=text[:MAX_TEXT],
         parse_mode="HTML",
-        buttons=buttons,
+        reply_markup=buttons,
+        disable_web_page_preview=True,
     )
 
 
@@ -329,13 +322,20 @@ async def info_callback(client, cb: CallbackQuery):
 
             if cb.message.caption is not None:
                 await smart_edit_message_caption(
-                    cb.message, caption=text[:MAX_CAPTION],
-                    parse_mode="HTML", buttons=buttons,
+                    chat_id=cb.message.chat.id,
+                    message_id=cb.message.id,
+                    caption=text[:MAX_CAPTION],
+                    parse_mode="HTML",
+                    reply_markup=buttons,
                 )
             else:
                 await smart_edit_message_text(
-                    cb.message, text=text[:MAX_TEXT],
-                    parse_mode="HTML", buttons=buttons,
+                    chat_id=cb.message.chat.id,
+                    message_id=cb.message.id,
+                    text=text[:MAX_TEXT],
+                    parse_mode="HTML",
+                    reply_markup=buttons,
+                    disable_web_page_preview=True,
                 )
 
     except Exception as e:
