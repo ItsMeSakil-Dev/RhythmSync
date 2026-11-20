@@ -5,6 +5,7 @@
 # ═══════════════════════════════════════════════════════════
 
 import os
+import re
 import tempfile
 import inspect
 from uuid import uuid4
@@ -22,6 +23,14 @@ from config import BOT_USERNAME
 
 BOT = BOT_USERNAME.lstrip("@").lower()
 
+USAGE_PACK = (
+    "**ᴜsᴀɢᴇ:** /packkang [ᴛɪᴛʟᴇ]\n\n"
+    "**ʀᴇᴘʟʏ ᴛᴏ ᴀ sᴛɪᴄᴋᴇʀ** ᴛᴏ ᴄʟᴏɴᴇ ɪᴛs ᴇɴᴛɪʀᴇ ᴘᴀᴄᴋ.\n\n"
+    "ᴇxᴀᴍᴘʟᴇ:\n"
+    "• /packkang — ᴄʟᴏɴᴇs ᴡɪᴛʜ ᴅᴇғᴀᴜʟᴛ ᴛɪᴛʟᴇ\n"
+    "• /packkang MʏPack — ᴄʟᴏɴᴇs ᴡɪᴛʜ ᴄᴜsᴛᴏᴍ ᴛɪᴛʟᴇ"
+)
+
 
 def _cs_kwargs(is_anim: bool, is_vid: bool) -> dict:
     params = inspect.signature(raw.functions.stickers.CreateStickerSet).parameters
@@ -31,6 +40,13 @@ def _cs_kwargs(is_anim: bool, is_vid: bool) -> dict:
     if is_vid and "videos" in params:
         kw["videos"] = True
     return kw
+
+
+def _sanitize_title(raw_title: str) -> str:
+    clean = re.sub(r"[^a-zA-Z0-9 \-]", "", raw_title or "Cloned Pack").strip()
+    if not clean:
+        clean = "Cloned Pack"
+    return clean[:32]
 
 
 @app.on_message(filters.command("st") & ~filters.reply)
@@ -85,14 +101,16 @@ async def download_sticker(client, message):
         await proc.delete()
 
 
-@app.on_message(filters.command("packkang") & filters.reply)
+@app.on_message(filters.command("packkang"))
 async def pack_clone(client, message):
+    # ── No reply → show usage ──
+    if not message.reply_to_message:
+        return await message.reply_text(USAGE_PACK)
+
     st = message.reply_to_message.sticker
     if not st:
         return await message.reply_text(
-            "**ᴜsᴀɢᴇ:** /packkang <ᴛɪᴛʟᴇ>\n"
-            "**ʀᴇᴘʟʏ ᴛᴏ ᴀ sᴛɪᴄᴋᴇʀ ᴛᴏ ᴄʟᴏɴᴇ ɪᴛs ᴘᴀᴄᴋ.**"
-        )
+            "**ᴇʀʀᴏʀ:** ʀᴇᴘʟʏ ᴛᴏ ᴀ sᴛɪᴄᴋᴇʀ ᴛᴏ ᴄʟᴏɴᴇ ɪᴛs ᴘᴀᴄᴋ.")
 
     proc = await message.reply_text("➣ cloning pack…")
     try:
@@ -104,12 +122,12 @@ async def pack_clone(client, message):
                 hash=0,
             )
         )
-        title = (
+        raw_title = (
             message.command[1]
             if len(message.command) > 1
-            else f"{message.from_user.first_name}'s pack"
+            else f"{(message.from_user.first_name or 'Cloned')}'s pack"
         )
-        title = title[:32]
+        title = _sanitize_title(raw_title)
         short = f"pack_{uuid4().hex[:8]}_by_{BOT}"
 
         items = []
