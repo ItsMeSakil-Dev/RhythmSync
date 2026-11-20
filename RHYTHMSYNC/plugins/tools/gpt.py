@@ -107,7 +107,7 @@ def get_requester_identity(message: Message):
 async def process_query(client: Client, message: Message, tts: bool = False, model: str = "gpt-3.5-turbo"):
     full, mention = get_requester_identity(message)
     if len(message.command) < 2:
-        return await message.reply_text(f"✨ ʜᴇʏ {mention}, ɪ’ᴍ ˹𝐀ɴɴɪᴇ ✘ 𝙰ɪ˼ 💫\nAsk me anything!")
+        return await message.reply_text(f"✨ ʜᴇʏ {mention}, ɪ'ᴍ ˹ʀʜʏᴛʜᴍ ✘ sʏɴᴄ˼ 💫\nAsk me anything!")
 
     query = message.text.split(" ", 1)[1].strip()
     if len(query) > 4000:
@@ -123,7 +123,7 @@ async def process_query(client: Client, message: Message, tts: bool = False, mod
 
         styled = (
             f"✨ ʜᴇʏ {mention},\n"
-            f"ɪ’ᴍ ˹𝐀ɴɴɪᴇ ✘ 𝙰ɪ˼ 💫\n"
+            f"ɪ'ᴍ ˹ʀʜʏᴛʜᴍ ✘ sʏɴᴄ˼ 💫\n"
             f"──────────────\n"
             f"🧠 ʀᴇsᴘᴏɴsᴇ:\n{content}"
         )
