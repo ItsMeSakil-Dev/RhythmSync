@@ -19,10 +19,10 @@ load_dotenv()
 
 HARDCODED_OPENROUTER_KEY = "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"
 OPENROUTER_KEY = os.getenv("OPENROUTER_KEY") or HARDCODED_OPENROUTER_KEY
-OPENROUTER_URL = "1/chat/completions"
-MODELS_URL = "https://.ai/api/v1/models"
+OPENROUTER_URL = "ions"
+MODELS_URL = "/models"
 
-# ── Static fallback list (sirf agar models API unreachable ho) ──
+# ── Static fallback (agar models API unreachable ho) ──
 FALLBACK_MODELS = [
     "nvidia/nemotron-3.5-super-vl:free",
     "nvidia/nemotron-3-ultra:free",
@@ -34,7 +34,6 @@ _models_cache = {"ids": [], "ts": 0}
 
 
 async def get_free_models() -> list:
-    """Live free-model list from  — 1 ghante ke liye cache hoti hai."""
     now = time.time()
     if _models_cache["ids"] and now - _models_cache["ts"] < 3600:
         return _models_cache["ids"]
@@ -50,7 +49,8 @@ async def get_free_models() -> list:
                             continue
                         mid = m.get("id", "")
                         low = mid.lower()
-                        if any(x in low for x in ("rerank", "embed", "transcribe", "whisper", "guard", "span-01")):
+                        skip_kw = ("rerank", "embed", "transcribe", "whisper", "guard", "span-01")
+                        if any(x in low for x in skip_kw):
                             continue
                         ids.append(mid)
                     ids.sort(key=lambda x: 0 if ("instruct" in x or "-it" in x) else 1)
@@ -98,16 +98,22 @@ async def get_gpt_response(prompt, model=None):
             candidates.append(model)
         candidates.extend(await get_free_models())
 
-        last_err = None
+        # dedupe
+        seen = set()
+        uniq = []
         for m in candidates:
-            if m in candidates[:candidates.index(m)]:
-                continue
+            if m not in seen:
+                seen.add(m)
+                uniq.append(m)
+
+        last_err = None
+        for m in uniq:
             try:
                 return await _try_model(session, prompt, m)
             except Exception as e:
                 last_err = str(e)
                 continue
-        raise Exception(f"❌ All models failed ({len(candidates)} tried). Last: {last_err}")
+        raise Exception(f"❌ All models failed ({len(uniq)} tried). Last: {last_err}")
 
 
 async def safe_gpt_response(prompt, timeout=45):
@@ -197,6 +203,7 @@ async def process_query(client, message, tts=False, model=None):
         else:
             for i in range(0, len(styled), 4096):
                 await message.reply_text(styled[i:i + 4096])
+
     except Exception as e:
         await message.reply_text(str(e))
     finally:
@@ -208,12 +215,16 @@ async def process_query(client, message, tts=False, model=None):
                 pass
 
 
-# ── COMMANDS ──
-@app.on_message(filters.command(["ai", "gpt", "bard", "gemini", "llama", "mistral"], prefixes=["/", ".", "-", "+", "?", "$"]))
+# ── MAIN AI COMMANDS ──
+@app.on_message(
+    filters.command(["ai", "gpt", "bard", "gemini", "llama", "mistral"],
+                   prefixes=["/", ".", "-", "+", "?", "$"])
+)
 async def gpt_handler(client, message):
     if not OPENROUTER_KEY:
         return await message.reply_text(
-            "❌ AI not configured.\n\nSet OPENROUTER_KEY in Render env vars or edit gpt.py."
+            "❌ AI not configured.\n\n"
+            "Set OPENROUTER_KEY in Render env vars or edit gpt.py."
         )
     try:
         await asyncio.wait_for(process_query(client, message), timeout=60)
@@ -224,6 +235,8 @@ async def gpt_handler(client, message):
 # ── SAKIL AI VOICE MODE ──
 @app.on_message(filters.command(["assis", "aivoice"], prefixes=["/", ".", "a", "A"]))
 async def sakil_tts_handler(client, message):
+    if not OPENROUTER_KEY:
+        return await message.reply_text("❌ AI not configured.")
     try:
         await asyncio.wait_for(process_query(client, message, tts=True), timeout=60)
     except asyncio.TimeoutError:
@@ -232,6 +245,6 @@ async def sakil_tts_handler(client, message):
 
 # ═══════════════════════════════════════════════════════════
 # 🌺 RhythmSync 🌺
-# github.com/SunloMusicOfficial/RhythmSync
+# GɪᴛHᴜʙ : github.com/SunloMusicOfficial/RhythmSync
 # Dᴇᴠʟᴏᴘᴇʀ : @YO_UR_OFFICIAL_CRUSH | Telegram
 # ═══════════════════════════════════════════════════════════
