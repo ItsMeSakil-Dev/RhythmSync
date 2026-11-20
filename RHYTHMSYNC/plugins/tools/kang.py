@@ -20,18 +20,17 @@ from pyrogram.errors import (
     FloodWait,
     RPCError,
 )
-# ── Some Pyrogram builds don't ship these names; fall back
-# ── to the base RPCError so the module can never fail to load.
+
 try:
     from pyrogram.errors import StickersTooMuch, FileReferenceExpired
 except ImportError:
-    StickersTooMuch = FileReferenceExpired = RPCError
+    StickersTooMuch = RPCError
+    FileReferenceExpired = RPCError
 
 from RHYTHMSYNC.utils.colored_buttons import (
     styled_button,
     smart_edit_message_text as edit_message_text_colored,
 )
-
 from RHYTHMSYNC import app
 from RHYTHMSYNC.utils.files import resize_file_to_sticker_size
 from config import BOT_USERNAME
@@ -40,7 +39,6 @@ BOT = BOT_USERNAME.lstrip("@").lower()
 
 
 def _cs_kwargs(is_anim: bool, is_vid: bool) -> dict:
-    """Return only the `animated`/`videos` flags supported by this Pyrogram build."""
     params = inspect.signature(raw.functions.stickers.CreateStickerSet).parameters
     kw = {}
     if is_anim and "animated" in params:
@@ -51,7 +49,6 @@ def _cs_kwargs(is_anim: bool, is_vid: bool) -> dict:
 
 
 def _pack_name(user_id: int, *, animated=False, video=False, index=0) -> str:
-    """Build a valid short_name: user<id>_<type>[ _pack<index> ]by<bot>"""
     parts = [f"user{user_id}"]
     parts.append("animated" if animated else "video" if video else "regular")
     if index:
@@ -61,18 +58,16 @@ def _pack_name(user_id: int, *, animated=False, video=False, index=0) -> str:
 
 
 def _pack_title(username: str, *, animated=False, video=False, index=0) -> str:
-    """Human-readable pack title: <User>'s Sticker/Animated/Video Pack [<index>]"""
     kind = "Animated" if animated else "Video" if video else "Sticker"
     suffix = f" {index}" if index else ""
     return f"{username}'s {kind} Pack{suffix}"
 
 
 def _to_input_doc(doc: raw.base.Document) -> raw.types.InputDocument:
-    """Convert a raw Document into an InputDocument for sticker-set calls."""
     return raw.types.InputDocument(
         id=doc.id,
         access_hash=doc.access_hash,
-        file_reference=doc.file_reference
+        file_reference=doc.file_reference,
     )
 
 
@@ -95,11 +90,15 @@ async def _prepare_media(message, tmp_dir: str, notify) -> Tuple[str, str, bool,
         return "image", p, False, False
 
     if (
-        r.video or r.animation or
-        (r.document and (
-            r.document.mime_type in ["video/mp4", "video/x-matroska", "image/gif"] or
-            (r.document.file_name and r.document.file_name.endswith(".gif"))
-        ))
+        r.video
+        or r.animation
+        or (
+            r.document
+            and (
+                r.document.mime_type in ["video/mp4", "video/x-matroska", "image/gif"]
+                or (r.document.file_name and r.document.file_name.endswith(".gif"))
+            )
+        )
     ):
         await notify.edit("➣ ᴘʀᴏᴄᴇssɪɴɢ ɢɪꜰ/ᴠɪᴅᴇᴏ…")
         raw_v = await r.download(os.path.join(tmp_dir, "raw.mp4"))
@@ -110,7 +109,7 @@ async def _prepare_media(message, tmp_dir: str, notify) -> Tuple[str, str, bool,
             "-ss", "0", "-t", "3",
             "-c:v", "libvpx-vp9", "-b:v", "500k", "-crf", "30",
             "-an", "-r", "30",
-            out_v
+            out_v,
         ]
         res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if res.returncode != 0:
@@ -138,7 +137,7 @@ async def kang(client, message):
                 sset = await client.invoke(
                     raw.functions.messages.GetStickerSet(
                         stickerset=raw.types.InputStickerSetShortName(short_name=short),
-                        hash=0
+                        hash=0,
                     )
                 )
                 if len(sset.documents) >= limit:
@@ -156,18 +155,34 @@ async def kang(client, message):
                 media=raw.types.InputMediaUploadedDocument(
                     file=await client.save_file(path),
                     mime_type=(
-                        "application/x-tgsticker" if is_anim else
-                        "video/webm"         if is_vid  else
-                        "image/png"
+                        "application/x-tgsticker" if is_anim
+                        else "video/webm" if is_vid
+                        else "image/png"
                     ),
                     attributes=[
-                        raw.types.DocumentAttributeFilename(file_name=os.path.basename(path)),
-                        raw.types.DocumentAttributeSticker(alt="", stickerset=raw.types.InputStickerSetEmpty(), mask=False)
-                    ] + (
-                        [raw.types.DocumentAttributeVideo(duration=0, w=512, h=512, round_message=False, supports_streaming=False)]
-                        if is_vid else []
-                    )
-                )
+                        raw.types.DocumentAttributeFilename(
+                            file_name=os.path.basename(path)
+                        ),
+                        raw.types.DocumentAttributeSticker(
+                            alt="",
+                            stickerset=raw.types.InputStickerSetEmpty(),
+                            mask=False,
+                        ),
+                    ]
+                    + (
+                        [
+                            raw.types.DocumentAttributeVideo(
+                                duration=0,
+                                w=512,
+                                h=512,
+                                round_message=False,
+                                supports_streaming=False,
+                            )
+                        ]
+                        if is_vid
+                        else []
+                    ),
+                ),
             )
         )
         doc = upload.document
@@ -178,7 +193,9 @@ async def kang(client, message):
             await client.invoke(
                 raw.functions.stickers.AddStickerToSet(
                     stickerset=raw.types.InputStickerSetShortName(short_name=short),
-                    sticker=raw.types.InputStickerSetItem(document=_to_input_doc(doc), emoji=emoji)
+                    sticker=raw.types.InputStickerSetItem(
+                        document=_to_input_doc(doc), emoji=emoji
+                    ),
                 )
             )
             created = False
@@ -188,8 +205,12 @@ async def kang(client, message):
                     user_id=await client.resolve_peer(uid),
                     title=title,
                     short_name=short,
-                    stickers=[raw.types.InputStickerSetItem(document=_to_input_doc(doc), emoji=emoji)],
-                    **_cs_kwargs(is_anim, is_vid)
+                    stickers=[
+                        raw.types.InputStickerSetItem(
+                            document=_to_input_doc(doc), emoji=emoji
+                        )
+                    ],
+                    **_cs_kwargs(is_anim, is_vid),
                 )
             )
             created = True
@@ -202,8 +223,12 @@ async def kang(client, message):
                     user_id=await client.resolve_peer(uid),
                     title=title,
                     short_name=short,
-                    stickers=[raw.types.InputStickerSetItem(document=_to_input_doc(doc), emoji=emoji)],
-                    **_cs_kwargs(is_anim, is_vid)
+                    stickers=[
+                        raw.types.InputStickerSetItem(
+                            document=_to_input_doc(doc), emoji=emoji
+                        )
+                    ],
+                    **_cs_kwargs(is_anim, is_vid),
                 )
             )
             created = True
@@ -211,7 +236,7 @@ async def kang(client, message):
         sset = await client.invoke(
             raw.functions.messages.GetStickerSet(
                 stickerset=raw.types.InputStickerSetShortName(short_name=short),
-                hash=0
+                hash=0,
             )
         )
         count = len(sset.documents)
@@ -223,8 +248,16 @@ async def kang(client, message):
             f"➣ {'ᴄʀᴇᴀᴛᴇᴅ' if created else 'ᴀᴅᴅᴇᴅ ᴛᴏ'} ʏᴏᴜʀ {kind_lbl} ᴘᴀᴄᴋ!\n"
             f"ᴘᴀᴄᴋ: {title}\n"
             f"ᴄᴏᴜɴᴛ: {count}\n"
-            f"ᴇᴍᴏʟɪ: {emoji}",
-            reply_markup=[[styled_button("ᴏᴘᴇɴ ᴘᴀᴄᴋ", url=f"https://t.me/addstickers/{short}", style="success")]],
+            f"ᴇᴍᴏᴊɪ: {emoji}",
+            reply_markup=[
+                [
+                    styled_button(
+                        "ᴏᴘᴇɴ ᴘᴀᴄᴋ",
+                        url=f"https://t.me/addstickers/{short}",
+                        style="success",
+                    )
+                ]
+            ],
         )
 
     except FloodWait as e:
