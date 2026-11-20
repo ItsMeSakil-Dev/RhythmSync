@@ -32,6 +32,7 @@ pyshorteners
 python-dotenv
 python-whois
 py-yt-search
+six>=1.16
 pyyaml
 qrcode
 requests
