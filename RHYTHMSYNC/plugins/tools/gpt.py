@@ -23,7 +23,7 @@ load_dotenv()
 # ── OpenRouter API Key ─────────────────────────────────────────
 # 👇 Option A (hardcoded): apni key yahan paste karo, env var ki zaroorat nahi
 #    Example: HARDCODED_OPENROUTER_KEY = "sk-or-v1-xxxxxxxxxxxxxxxx"
-HARDCODED_OPENROUTER_KEY = ""  # apni key .env ke OPENROUTER_KEY me daalo
+HARDCODED_OPENROUTER_KEY = "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"  # apni key .env ke OPENROUTER_KEY me daalo
 
 # Option B: ya phir hosting ke env vars me OPENROUTER_KEY set karo
 # env var ko priority di gayi hai (hardcoded sirf fallback hai)
