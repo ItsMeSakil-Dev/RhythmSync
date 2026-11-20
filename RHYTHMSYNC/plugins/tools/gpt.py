@@ -18,7 +18,7 @@ load_dotenv()
 
 HARDCODED_OPENROUTER_KEY = "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"
 OPENROUTER_KEY = os.getenv("OPENROUTER_KEY") or HARDCODED_OPENROUTER_KEY
-OPENROUTER_URL = "1/chat/completions"
+OPENROUTEROPENROUTER_URL = "1/chat/completions"
 
 # ── 12 FREE MODELS — auto-fallback ──
 FREE_MODELS = [
@@ -58,7 +58,7 @@ async def _try_model(session, prompt, model):
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": 1024,
     }
-    async with session.post(_URL, headers=headers, json=data, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+    async with session.post(OPENROUTER_URL, headers=headers, json=data, timeout=aiohttp.ClientTimeout(total=30)) as resp:
         text = await resp.text()
         if resp.status == 200:
             result = await resp.json()
