@@ -5,6 +5,7 @@
 # ═══════════════════════════════════════════════════════════
 
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -37,6 +38,27 @@ from config import BOT_USERNAME
 
 BOT = BOT_USERNAME.lstrip("@").lower()
 
+USAGE_MSG = (
+    "**ᴜsᴀɢᴇ:** /kang [ᴇᴍᴏᴊɪ]\n\n"
+    "**ʀᴇᴘʟʏ ᴛᴏ:**\n"
+    "• sᴛɪᴄᴋᴇʀ → ᴀᴅᴅ ᴛᴏ ʏᴏᴜʀ ᴘᴀᴄᴋ\n"
+    "• ᴘʜᴏᴛᴏ/ɪᴍᴀɢᴇ → ᴄᴏɴᴠᴇʀᴛ ᴛᴏ sᴛɪᴄᴋᴇʀ\n"
+    "• ɢɪꜰ/ᴠɪᴅᴇᴏ → ᴄᴏɴᴠᴇʀᴛ ᴛᴏ ᴠɪᴅᴇᴏ sᴛɪᴄᴋᴇʀ\n\n"
+    "ᴇxᴀᴍᴘʟᴇ: /kang 😂\n"
+    "(ʀᴇᴘʟʏ ᴛᴏ ᴀɴʏ ᴍᴇᴅɪᴀ)"
+)
+
+
+def _sanitize_title(name: str, kind: str, index: int = 0) -> str:
+    """Build a valid 32-char max pack title with no special chars."""
+    clean = re.sub(r"[^a-zA-Z0-9 \-]", "", name or "User").strip()
+    if not clean:
+        clean = "My"
+    clean = clean[:20]
+    suffix = f" {index}" if index else ""
+    title = f"{clean} {kind} Pack{suffix}"
+    return title[:32]
+
 
 def _cs_kwargs(is_anim: bool, is_vid: bool) -> dict:
     params = inspect.signature(raw.functions.stickers.CreateStickerSet).parameters
@@ -55,12 +77,6 @@ def _pack_name(user_id: int, *, animated=False, video=False, index=0) -> str:
         parts.append(f"pack{index}")
     parts += ["by", BOT]
     return "_".join(parts)
-
-
-def _pack_title(username: str, *, animated=False, video=False, index=0) -> str:
-    kind = "Animated" if animated else "Video" if video else "Sticker"
-    suffix = f" {index}" if index else ""
-    return f"{username}'s {kind} Pack{suffix}"
 
 
 def _to_input_doc(doc: raw.base.Document) -> raw.types.InputDocument:
@@ -119,15 +135,25 @@ async def _prepare_media(message, tmp_dir: str, notify) -> Tuple[str, str, bool,
     raise ValueError("unsupported media type")
 
 
-@app.on_message(filters.command("kang") & filters.reply)
+@app.on_message(filters.command("kang"))
 async def kang(client, message):
+    # ── No reply → show usage ──
+    if not message.reply_to_message:
+        return await message.reply_text(USAGE_MSG)
+
+    r = message.reply_to_message
+    has_media = r.sticker or r.photo or r.video or r.animation or r.document
+    if not has_media:
+        return await message.reply_text(
+            "**ᴇʀʀᴏʀ:** ʀᴇᴘʟʏ ᴛᴏ ᴀ sᴛɪᴄᴋᴇʀ, ɪᴍᴀɢᴇ, ɢɪꜰ, ᴏʀ ᴠɪᴅᴇᴏ.")
+
     notify = await message.reply_text("➣ ᴘʀᴏᴄᴇssɪɴɢ…")
     tmp_dir = tempfile.mkdtemp()
 
     try:
         kind, path, is_anim, is_vid = await _prepare_media(message, tmp_dir, notify)
         uid = message.from_user.id
-        uname = message.from_user.first_name
+        uname = (message.from_user.first_name or "My").strip()
         limit = 50 if is_anim or is_vid else 120
 
         idx = 0
@@ -147,7 +173,8 @@ async def kang(client, message):
             except StickersetInvalid:
                 break
 
-        title = _pack_title(uname, animated=is_anim, video=is_vid, index=idx)
+        kind_lbl = "Animated" if is_anim else "Video" if is_vid else "Sticker"
+        title = _sanitize_title(uname, kind_lbl, idx)
 
         upload = await client.invoke(
             raw.functions.messages.UploadMedia(
@@ -217,7 +244,7 @@ async def kang(client, message):
         except StickersTooMuch:
             idx += 1
             short = _pack_name(uid, animated=is_anim, video=is_vid, index=idx)
-            title = _pack_title(uname, animated=is_anim, video=is_vid, index=idx)
+            title = _sanitize_title(uname, kind_lbl, idx)
             await client.invoke(
                 raw.functions.stickers.CreateStickerSet(
                     user_id=await client.resolve_peer(uid),
@@ -240,12 +267,12 @@ async def kang(client, message):
             )
         )
         count = len(sset.documents)
-        kind_lbl = "ᴀɴɪᴍᴀᴛᴇᴅ" if is_anim else "ᴠɪᴅᴇᴏ" if is_vid else "sᴛᴀᴛɪᴄ"
+        kind_lbl_2 = "ᴀɴɪᴍᴀᴛᴇᴅ" if is_anim else "ᴠɪᴅᴇᴏ" if is_vid else "sᴛᴀᴛɪᴄ"
 
         await edit_message_text_colored(
             notify.chat.id,
             notify.id,
-            f"➣ {'ᴄʀᴇᴀᴛᴇᴅ' if created else 'ᴀᴅᴅᴇᴅ ᴛᴏ'} ʏᴏᴜʀ {kind_lbl} ᴘᴀᴄᴋ!\n"
+            f"➣ {'ᴄʀᴇᴀᴛᴇᴅ' if created else 'ᴀᴅᴅᴇᴅ ᴛᴏ'} ʏᴏᴜʀ {kind_lbl_2} ᴘᴀᴄᴋ!\n"
             f"ᴘᴀᴄᴋ: {title}\n"
             f"ᴄᴏᴜɴᴛ: {count}\n"
             f"ᴇᴍᴏᴊɪ: {emoji}",
