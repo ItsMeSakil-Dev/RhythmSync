@@ -1,7 +1,7 @@
 # ═══════════════════════════════════════════════════════════
-#        🌺 RhythmSync 🌺
-#   GɪᴛHᴜʙ : github.com/SunloMusicOfficial/RhythmSync
-#   Dᴇᴠʟᴏᴘᴇʀ : @YO_UR_OFFICIAL_CRUSH | Telegram
+# 🌺 RhythmSync 🌺
+# GɪᴛHᴜʙ : github.com/SunloMusicOfficial/RhythmSync
+# Dᴇᴠʟᴏᴘᴇʀ : @YO_UR_OFFICIAL_CRUSH | Telegram
 # ═══════════════════════════════════════════════════════════
 
 import os
@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from PIL import Image
 from pyrogram import raw, filters
-from pyrogram.errors import StickersetInvalid
+from pyrogram.errors import StickersetInvalid, RPCError
 
 from RHYTHMSYNC import app
 from RHYTHMSYNC.utils.colored_buttons import (
@@ -19,6 +19,8 @@ from RHYTHMSYNC.utils.colored_buttons import (
     smart_edit_message_text as edit_message_text_colored,
 )
 from config import BOT_USERNAME
+
+BOT = BOT_USERNAME.lstrip("@").lower()
 
 
 def _cs_kwargs(is_anim: bool, is_vid: bool) -> dict:
@@ -48,8 +50,8 @@ async def show_ids(_, message):
     if not st:
         return await message.reply_text("reply to a sticker")
     await message.reply_text(
-        f"sticker id: `{st.file_id}`\n"
-        f"unique id: `{st.file_unique_id}`"
+        f"sticker id: {st.file_id}\n"
+        f"unique id: {st.file_unique_id}"
     )
 
 
@@ -71,28 +73,37 @@ async def download_sticker(client, message):
             out = f"{path}.png"
             img.save(out, "PNG")
             await client.send_photo(message.chat.id, out, caption="here's your static image!")
-    await proc.delete()
+        await proc.delete()
 
 
 @app.on_message(filters.command("packkang") & filters.reply)
 async def pack_clone(client, message):
-    proc = await message.reply_text("➣ cloning pack…")
     st = message.reply_to_message.sticker
+    if not st:
+        return await message.reply_text(
+            "**ᴜsᴀɢᴇ:** /packkang <ᴛɪᴛʟᴇ>\n"
+            "**ʀᴇᴘʟʏ ᴛᴏ ᴀ sᴛɪᴄᴋᴇʀ ᴛᴏ ᴄʟᴏɴᴇ ɪᴛs ᴘᴀᴄᴋ.**")
+    proc = await message.reply_text("➣ cloning pack…")
     try:
         sset = await client.invoke(
             raw.functions.messages.GetStickerSet(
                 stickerset=raw.types.InputStickerSetShortName(short_name=st.set_name), hash=0
             )
         )
-        title = message.command[1] if len(message.command) > 1 else f"{message.from_user.first_name}'s pack"
-        short = f"pack_{uuid4().hex[:8]}_by_{BOT_USERNAME}"
+        title = (message.command[1] if len(message.command) > 1
+                 else f"{message.from_user.first_name}'s pack")
+        title = title[:32]  # Telegram allows max 32 chars
+        # short_name must match ^[-_0-9a-z]+$ — keep it lowercase!
+        short = f"pack_{uuid4().hex[:8]}_by_{BOT}"
         items = []
         for doc in sset.documents:
-            emoji = next((a.alt for a in doc.attributes if isinstance(a, raw.types.DocumentAttributeSticker)), "🤔")
+            emoji = next((a.alt for a in doc.attributes
+                         if isinstance(a, raw.types.DocumentAttributeSticker)), "🤔")
             items.append(
                 raw.types.InputStickerSetItem(
                     document=raw.types.InputDocument(
-                        id=doc.id, access_hash=doc.access_hash, file_reference=doc.file_reference
+                        id=doc.id, access_hash=doc.access_hash,
+                        file_reference=doc.file_reference
                     ),
                     emoji=emoji
                 )
@@ -114,10 +125,15 @@ async def pack_clone(client, message):
         )
     except StickersetInvalid:
         await proc.edit("invalid sticker set")
-    except Exception as e:
+    except FloodWait as e:
+        await proc.edit(f"flood wait – retry in {e.x}s")
+    except RPCError as e:
         await proc.edit(f"error: {e}")
+    except Exception as e:
+        await proc.edit(f"unexpected error: {e}")
+
 
 # ═══════════════════════════════════════════════════════════
-#         🌺 RhythmSync 🌺
-#   github.com/SunloMusicOfficial/RhythmSync
+# 🌺 RhythmSync 🌺
+# github.com/SunloMusicOfficial/RhythmSync
 # ═══════════════════════════════════════════════════════════
