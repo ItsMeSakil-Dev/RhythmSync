@@ -36,7 +36,7 @@ OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 # -----------------------------
 # 🔧 GPT API — OpenRouter
 # -----------------------------
-async def get_gpt_response(prompt: str, model: str = "meta-llama/llama-3.1-8b-instruct:free") -> str:
+async def get_gpt_response(prompt: str, model: str = "mistralai/mistral-7b-instruct:free") -> str:
     try:
         headers = {
             "Content-Type": "application/json",
@@ -104,7 +104,7 @@ def get_requester_identity(message: Message):
     return "there", "there"
 
 # -----------------------------
-async def process_query(client: Client, message: Message, tts: bool = False, model: str = "meta-llama/llama-3.1-8b-instruct:free"):
+async def process_query(client: Client, message: Message, tts: bool = False, model: str = "mistralai/mistral-7b-instruct:free"):
     full, mention = get_requester_identity(message)
     if len(message.command) < 2:
         return await message.reply_text(f"✨ ʜᴇʏ {mention}, ɪ'ᴍ ˹ʀʜʏᴛʜᴍ ✘ sʏɴᴄ˼ 💫\nAsk me anything!")
@@ -166,10 +166,10 @@ async def gpt_handler(client: Client, message: Message):
             "`HARDCODED_OPENROUTER_KEY` ᴍᴇ ᴘᴀsᴛᴇ ᴋᴀʀᴏ, "
             "ᴘʜɪʀ ʙᴏᴛ ʀᴇsᴛᴀʀᴛ ᴋᴀʀᴏ."
         )
-    # Current OpenRouter model IDs (old IDs like meta-llama/llama-3.1-8b-instruct:free are deprecated)
+    # Current OpenRouter model IDs (old IDs like mistralai/mistral-7b-instruct:free are deprecated)
     model_map = {
         "ai": "openrouter/free",
-        "gpt": "meta-llama/llama-3.1-8b-instruct:free",
+        "gpt": "mistralai/mistral-7b-instruct:free",
         "bard": "google/gemini-3.7-flash",
         "gemini": "google/gemini-3.7-flash",
         "llama": "meta-llama/llama-4-maverick",
