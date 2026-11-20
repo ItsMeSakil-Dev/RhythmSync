@@ -70,14 +70,12 @@ async def get_gpt_response(prompt, model=None):
     if not OPENROUTER_KEY:
         raise Exception("OPENROUTER_KEY missing — set it in Render env vars or edit gpt.py")
     async with aiohttp.ClientSession() as session:
-        # Try specific model first if given
         if model:
             try:
                 return await _try_model(session, prompt, model)
             except Exception as e:
                 if ":free" not in model:
                     raise Exception(f"❌ Paid model unavailable: {e}")
-        # Fallback: try all free models
         last_err = None
         for m in FREE_MODELS:
             try:
@@ -193,10 +191,10 @@ async def process_query(client, message, tts=False, model=None):
 
 @app.on_message(filters.command(["ai", "gpt", "bard", "gemini", "llama", "mistral"], prefixes=["/", ".", "-", "+", "?", "$"]))
 async def gpt_handler(client, message):
-    if not _KEY:
+    if not OPENROUTER_KEY:
         return await message.reply_text(
             "❌ AI not configured.\n\n"
-            "Set OPENROUTER_KEY in Render env vars."
+            "Set _KEY in Render env vars."
         )
     cmd = message.command[0].lower()
     model = PAID_MODEL_MAP.get(cmd)
@@ -216,5 +214,5 @@ async def sakil_tts_handler(client, message):
 
 # ═══════════════════════════════════════════════════════════
 # 🌺 RhythmSync 🌺
-# github.com/SunloMusicOfficial/RhythmSync
+# github.com.com/SunloMusicOfficial/RhythmSync
 # ═══════════════════════════════════════════════════════════
