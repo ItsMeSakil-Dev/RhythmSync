@@ -18,7 +18,7 @@ load_dotenv()
 
 HARDCODED_OPENROUTER_KEY = "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"
 OPENROUTER_KEY = os.getenv("OPENROUTER_KEY") or HARDCODED_OPENROUTER_KEY
-OPENROUTEROPENROUTER_URL = "1/chat/completions"
+_URL = "1/chat/completions"
 
 # ── 12 FREE MODELS — auto-fallback ──
 FREE_MODELS = [
