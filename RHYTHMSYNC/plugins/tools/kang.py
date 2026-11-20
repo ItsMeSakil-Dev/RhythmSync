@@ -1,7 +1,7 @@
 # ═══════════════════════════════════════════════════════════
-#        🌺 RhythmSync 🌺
-#   GɪᴛHᴜʙ : github.com/SunloMusicOfficial/RhythmSync
-#   Dᴇᴠʟᴏᴘᴇʀ : @YO_UR_OFFICIAL_CRUSH | Telegram
+# 🌺 RhythmSync 🌺
+# GɪᴛHᴜʙ : github.com/SunloMusicOfficial/RhythmSync
+# Dᴇᴠʟᴏᴘᴇʀ : @YO_UR_OFFICIAL_CRUSH | Telegram
 # ═══════════════════════════════════════════════════════════
 
 import os
@@ -15,13 +15,18 @@ from typing import Tuple
 from pyrogram import raw, filters
 from pyrogram.errors import (
     StickersetInvalid,
-    StickersTooMuch,
     StickerEmojiInvalid,
     PeerIdInvalid,
     FloodWait,
-    FileReferenceExpired,
     RPCError,
 )
+# ── Some Pyrogram builds don't ship these names; fall back
+# ── to the base RPCError so the module can never fail to load.
+try:
+    from pyrogram.errors import StickersTooMuch, FileReferenceExpired
+except ImportError:
+    StickersTooMuch = FileReferenceExpired = RPCError
+
 from RHYTHMSYNC.utils.colored_buttons import (
     styled_button,
     smart_edit_message_text as edit_message_text_colored,
@@ -35,9 +40,7 @@ BOT = BOT_USERNAME.lstrip("@").lower()
 
 
 def _cs_kwargs(is_anim: bool, is_vid: bool) -> dict:
-    """
-    Return only the `animated`/`videos` flags supported by this Pyrogram build.
-    """
+    """Return only the `animated`/`videos` flags supported by this Pyrogram build."""
     params = inspect.signature(raw.functions.stickers.CreateStickerSet).parameters
     kw = {}
     if is_anim and "animated" in params:
@@ -48,10 +51,7 @@ def _cs_kwargs(is_anim: bool, is_vid: bool) -> dict:
 
 
 def _pack_name(user_id: int, *, animated=False, video=False, index=0) -> str:
-    """
-    Build a valid short_name:
-      user<id>_<type>[ _pack<index> ]_by_<bot>
-    """
+    """Build a valid short_name: user<id>_<type>[ _pack<index> ]by<bot>"""
     parts = [f"user{user_id}"]
     parts.append("animated" if animated else "video" if video else "regular")
     if index:
@@ -61,19 +61,14 @@ def _pack_name(user_id: int, *, animated=False, video=False, index=0) -> str:
 
 
 def _pack_title(username: str, *, animated=False, video=False, index=0) -> str:
-    """
-    Human‑readable pack title:
-      <User>'s Sticker/Animated/Video Pack [<index>]
-    """
+    """Human-readable pack title: <User>'s Sticker/Animated/Video Pack [<index>]"""
     kind = "Animated" if animated else "Video" if video else "Sticker"
     suffix = f" {index}" if index else ""
     return f"{username}'s {kind} Pack{suffix}"
 
 
 def _to_input_doc(doc: raw.base.Document) -> raw.types.InputDocument:
-    """
-    Convert a raw Document into an InputDocument for sticker‑set calls.
-    """
+    """Convert a raw Document into an InputDocument for sticker-set calls."""
     return raw.types.InputDocument(
         id=doc.id,
         access_hash=doc.access_hash,
@@ -228,7 +223,7 @@ async def kang(client, message):
             f"➣ {'ᴄʀᴇᴀᴛᴇᴅ' if created else 'ᴀᴅᴅᴇᴅ ᴛᴏ'} ʏᴏᴜʀ {kind_lbl} ᴘᴀᴄᴋ!\n"
             f"ᴘᴀᴄᴋ: {title}\n"
             f"ᴄᴏᴜɴᴛ: {count}\n"
-            f"ᴇᴍᴏᴊɪ: {emoji}",
+            f"ᴇᴍᴏʟɪ: {emoji}",
             reply_markup=[[styled_button("ᴏᴘᴇɴ ᴘᴀᴄᴋ", url=f"https://t.me/addstickers/{short}", style="success")]],
         )
 
@@ -241,7 +236,8 @@ async def kang(client, message):
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
+
 # ═══════════════════════════════════════════════════════════
-#         🌺 RhythmSync 🌺
-#   github.com/SunloMusicOfficial/RhythmSync
+# 🌺 RhythmSync 🌺
+# github.com/SunloMusicOfficial/RhythmSync
 # ═══════════════════════════════════════════════════════════
