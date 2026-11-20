@@ -1,10 +1,9 @@
 # ═══════════════════════════════════════════════════════════
-#        🌺 RhythmSync 🌺
-#   GɪᴛHᴜʙ : github.com/SunloMusicOfficial/RhythmSync
-#   Dᴇᴠʟᴏᴘᴇʀ : @YO_UR_OFFICIAL_CRUSH | Telegram
+# 🌺 RhythmSync 🌺
+# GɪᴛHᴜʙ : github.com/SunloMusicOfficial/RhythmSync
+# Dᴇᴠʟᴏᴘᴇʀ : @YO_UR_OFFICIAL_CRUSH | Telegram
 # ═══════════════════════════════════════════════════════════
 
-# RHYTHMSYNC/plugins/tools/gpt.py
 import asyncio
 import os
 import aiohttp
@@ -13,59 +12,92 @@ from pyrogram import Client, filters
 from pyrogram.types import Message
 from pyrogram.enums import ChatAction
 from RHYTHMSYNC import app
-from dotenv import load_dotenv  # ✅ Added for environment variables
+from dotenv import load_dotenv
 
-# -----------------------------
-# 🧠 Load environment variables
-# -----------------------------
 load_dotenv()
 
-# ── OpenRouter API Key ─────────────────────────────────────────
-# 👇 Option A (hardcoded): apni key yahan paste karo, env var ki zaroorat nahi
-#    Example: HARDCODED_OPENROUTER_KEY = "sk-or-v1-xxxxxxxxxxxxxxxx"
-HARDCODED_OPENROUTER_KEY = "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"  # apni key .env ke OPENROUTER_KEY me daalo
-
-# Option B: ya phir hosting ke env vars me OPENROUTER_KEY set karo
-# env var ko priority di gayi hai (hardcoded sirf fallback hai)
+HARDCODED_OPENROUTER_KEY = "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"
 OPENROUTER_KEY = os.getenv("OPENROUTER_KEY") or HARDCODED_OPENROUTER_KEY
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+OPENROUTER_URL = "1/chat/completions"
 
-# NOTE: no module-level raise here — a missing key must NOT crash the whole
-# bot at startup. Commands reply with a setup hint instead.
+# ── 12 FREE MODELS — auto-fallback ──
+FREE_MODELS = [
+    "google/gemma-3-12b-it:free",
+    "meta-llama/llama-3.2-3b-instruct:free",
+    "meta-llama/llama-3.2-1b-instruct:free",
+    "google/gemma-2-9b-it:free",
+    "mistralai/mistral-7b-instruct:free",
+    "huggingfaceh4/zephyr-7b-beta:free",
+    "nousresearch/nous-hermes-2-mixtral-8x7b-dpo:free",
+    " teknium/openhermes-2.5-mistral-7b-16k:free",
+    "pyromind/lmstudio-community/llama-3.2-3b:free",
+    "liuhaotian/llava-1.6-34b-hf:free",
+    "gryphe/mythomax-l2-13b:free",
+    "undi95/toppy-m-7b:free",
+]
 
-# -----------------------------
-# 🔧 GPT API — OpenRouter
-# -----------------------------
-async def get_gpt_response(prompt: str, model: str = "google/gemma-2-9b-it:free") -> str:
-    try:
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {OPENROUTER_KEY}",
-        }
-        data = {
-            "model": model,
-            "messages": [{"role": "user", "content": prompt}],
-        }
-        async with aiohttp.ClientSession() as session:
-            async with session.post(OPENROUTER_URL, headers=headers, json=data, timeout=60) as resp:
-                if resp.status != 200:
-                    text = await resp.text()
-                    raise Exception(f"API Error {resp.status}: {text}")
-                result = await resp.json()
-                return result["choices"][0]["message"]["content"]
-    except Exception as e:
-        raise Exception(f"❌ GPT Error: {e}")
+# ── Paid models for specific commands ──
+PAID_MODEL_MAP = {
+    "gpt": "openai/gpt-4o",
+    "bard": "google/gemini--001",
+    "gemini": "google/gemini--001",
+    "llama": "meta-llama/llama-3.3-70b-instruct",
+    "mistral": "mistralai/mistral-large-2411",
+}
 
-# -----------------------------
-async def safe_gpt_response(prompt: str, timeout: int = 30) -> str:
+
+async def _try_model(session, prompt, model):
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {OPENROUTER_KEY}",
+        "HTTP-Referer": "https://github.com/SunloMusicOfficial/RhythmSync",
+        "X-Title": "RhythmSyncBot",
+    }
+    data = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 1024,
+    }
+    async with session.post(_URL, headers=headers, json=data, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+        text = await resp.text()
+        if resp.status == 200:
+            result = await resp.json()
+            return result["choices"][0]["message"]["content"]
+        raise Exception(f"{resp.status}: {text[:100]}")
+
+
+async def get_gpt_response(prompt, model=None):
+    if not OPENROUTER_KEY:
+        raise Exception("OPENROUTER_KEY missing — set it in Render env vars or edit gpt.py")
+    async with aiohttp.ClientSession() as session:
+        # Try specific model first if given
+        if model:
+            try:
+                return await _try_model(session, prompt, model)
+            except Exception as e:
+                if ":free" not in model:
+                    raise Exception(f"❌ Paid model unavailable: {e}")
+        # Fallback: try all free models
+        last_err = None
+        for m in FREE_MODELS:
+            try:
+                return await _try_model(session, prompt, m)
+            except Exception as e:
+                last_err = e
+                continue
+        raise Exception(f"❌ All models failed. Last error: {last_err}")
+
+
+async def safe_gpt_response(prompt, timeout=30):
     try:
         return await asyncio.wait_for(get_gpt_response(prompt), timeout=timeout)
     except asyncio.TimeoutError:
-        raise Exception("⚠️ GPT request timed out.")
+        raise Exception("⚠️ Request timed out.")
     except Exception as e:
         raise Exception(str(e))
 
-async def send_typing_action(client: Client, chat_id: int, interval: int = 3):
+
+async def send_typing_action(client, chat_id, interval=3):
     try:
         while True:
             await client.send_chat_action(chat_id, ChatAction.TYPING)
@@ -73,11 +105,13 @@ async def send_typing_action(client: Client, chat_id: int, interval: int = 3):
     except asyncio.CancelledError:
         pass
 
+
 def _build_fullname(first_name, last_name, username):
     first = first_name or ""
     last = (last_name or "").strip()
     full = (f"{first} {last}".strip()) or (f"@{username}" if username else "")
     return full or "there"
+
 
 def _user_mention_text(user):
     full = _build_fullname(
@@ -93,7 +127,8 @@ def _user_mention_text(user):
             pass
     return f"[{full}](tg://user?id={user.id})"
 
-def get_requester_identity(message: Message):
+
+def get_requester_identity(message):
     if message.from_user:
         u = message.from_user
         full = _build_fullname(u.first_name, getattr(u, "last_name", None), getattr(u, "username", None))
@@ -103,11 +138,13 @@ def get_requester_identity(message: Message):
         return title, title
     return "there", "there"
 
-# -----------------------------
-async def process_query(client: Client, message: Message, tts: bool = False, model: str = "google/gemma-2-9b-it:free"):
+
+async def process_query(client, message, tts=False, model=None):
     full, mention = get_requester_identity(message)
     if len(message.command) < 2:
-        return await message.reply_text(f"✨ ʜᴇʏ {mention}, ɪ'ᴍ ˹ʀʜʏᴛʜᴍ ✘ sʏɴᴄ˼ 💫\nAsk me anything!")
+        return await message.reply_text(
+            f"✨ ʜᴇʏ {mention},\nɪ'ᴍ ˹ʀʜʏᴛʜᴍ ✘ sʏɴᴄ˼ 💫\nAsk me anything!"
+        )
 
     query = message.text.split(" ", 1)[1].strip()
     if len(query) > 4000:
@@ -117,9 +154,9 @@ async def process_query(client: Client, message: Message, tts: bool = False, mod
     typing_task = asyncio.create_task(send_typing_action(client, message.chat.id))
 
     try:
-        content = await safe_gpt_response(query, timeout=40)
+        content = await safe_gpt_response(query)
         if not content:
-            return await message.reply_text("⚠️ No response from GPT.")
+            return await message.reply_text("⚠️ No response.")
 
         styled = (
             f"✨ ʜᴇʏ {mention},\n"
@@ -138,7 +175,7 @@ async def process_query(client: Client, message: Message, tts: bool = False, mod
                     caption=styled
                 )
             except Exception as tts_error:
-                await message.reply_text(f"❌ Voice generation error: {tts_error}")
+                await message.reply_text(f"❌ Voice error: {tts_error}")
         else:
             for i in range(0, len(styled), 4096):
                 await message.reply_text(styled[i:i+4096])
@@ -150,49 +187,34 @@ async def process_query(client: Client, message: Message, tts: bool = False, mod
         if os.path.exists(audio_file):
             try:
                 os.remove(audio_file)
-            except:
+            except Exception:
                 pass
 
-# -----------------------------
-# COMMANDS
-# -----------------------------
+
 @app.on_message(filters.command(["ai", "gpt", "bard", "gemini", "llama", "mistral"], prefixes=["/", ".", "-", "+", "?", "$"]))
-async def gpt_handler(client: Client, message: Message):
-    if not OPENROUTER_KEY:
+async def gpt_handler(client, message):
+    if not _KEY:
         return await message.reply_text(
-            "❌ AI ɪs ɴᴏᴛ ᴄᴏɴꜰɪɢᴜʀᴇᴅ.\n\n"
-            "Gᴇᴛ ᴀ ꜰʀᴇᴇ ᴋᴇʏ ᴀᴛ openrouter.ai/keys ᴀᴜʀ ᴜsᴇ "
-            "`RHYTHMSYNC/plugins/tools/gpt.py` ᴋᴇ ᴛᴏᴘ ᴘᴀʀ "
-            "`HARDCODED_OPENROUTER_KEY` ᴍᴇ ᴘᴀsᴛᴇ ᴋᴀʀᴏ, "
-            "ᴘʜɪʀ ʙᴏᴛ ʀᴇsᴛᴀʀᴛ ᴋᴀʀᴏ."
+            "❌ AI not configured.\n\n"
+            "Set OPENROUTER_KEY in Render env vars."
         )
-    # Current OpenRouter model IDs (old IDs like google/gemma-2-9b-it:free are deprecated)
-    model_map = {
-        "ai": "openrouter/free",
-        "gpt": "google/gemma-2-9b-it:free",
-        "bard": "google/gemini-3.7-flash",
-        "gemini": "google/gemini-3.7-flash",
-        "llama": "meta-llama/llama-4-maverick",
-        "mistral": "mistralai/mistral-medium-3-5",
-    }
     cmd = message.command[0].lower()
-    model = model_map.get(cmd, "openrouter/free")
+    model = PAID_MODEL_MAP.get(cmd)
     try:
         await asyncio.wait_for(process_query(client, message, model=model), timeout=60)
     except asyncio.TimeoutError:
-        await message.reply_text("⏳ Timeout. Try again with a shorter prompt.")
+        await message.reply_text("⏳ Timeout. Try again.")
 
-# -----------------------------
-# SAKIL AI VOICE MODE
-# -----------------------------
+
 @app.on_message(filters.command(["assis", "aivoice"], prefixes=["/", ".", "a", "A"]))
-async def sakil_tts_handler(client: Client, message: Message):
+async def sakil_tts_handler(client, message):
     try:
         await asyncio.wait_for(process_query(client, message, tts=True), timeout=60)
     except asyncio.TimeoutError:
-        await message.reply_text("⏳ Timeout. Try again with a shorter prompt.")
+        await message.reply_text("⏳ Timeout. Try again.")
+
 
 # ═══════════════════════════════════════════════════════════
-#         🌺 RhythmSync 🌺
-#   github.com/SunloMusicOfficial/RhythmSync
+# 🌺 RhythmSync 🌺
+# github.com/SunloMusicOfficial/RhythmSync
 # ═══════════════════════════════════════════════════════════
