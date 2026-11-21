@@ -9,7 +9,6 @@ import re
 import time
 import asyncio
 import aiohttp
-import aiofiles
 from gtts import gTTS
 from pyrogram import Client, filters
 from pyrogram.types import Message
@@ -48,7 +47,6 @@ SYSTEM_PROMPT = (
     "Keep answers clear and concise."
 )
 
-
 # ─────────────────────────────────────────────
 # MODEL FETCHING
 # ─────────────────────────────────────────────
@@ -83,7 +81,6 @@ async def get_free_models() -> list:
         print(f"[GPT] model fetch failed: {e}")
 
     return _models_cache["ids"] or FALLBACK_MODELS
-
 
 # ─────────────────────────────────────────────
 # OPENROUTER CALL
@@ -138,7 +135,6 @@ async def get_gpt_response(prompt, model=None):
                 continue
         raise Exception(f"All models failed. Last: {last_err}")
 
-
 # ─────────────────────────────────────────────
 # HELPERS
 # ─────────────────────────────────────────────
@@ -163,7 +159,6 @@ async def _send_typing(client, chat_id, stop_event):
         except Exception:
             pass
         await asyncio.sleep(4)
-
 
 # ─────────────────────────────────────────────
 # AI COMMAND  (.ai / .gpt / .ask)
@@ -246,6 +241,50 @@ async def ai_handler(client: Client, message: Message):
         except Exception:
             pass
 
+# ─────────────────────────────────────────────
+# REPLY TO BOT HANDLER (Group Chat AI)
+# ─────────────────────────────────────────────
+@app.on_message(filters.reply & filters.text & ~filters.bot & ~filters.via_bot)
+async def reply_ai_handler(client: Client, message: Message):
+    # Command ignore karo taaki double trigger na ho
+    if message.text.startswith(("/", ".", "!")):
+        return
+
+    replied = message.reply_to_message
+    if not replied or not replied.from_user:
+        return
+
+    me = await client.get_me()
+    if replied.from_user.id != me.id:
+        return
+
+    prompt = message.text.strip()
+    if not prompt:
+        return
+
+    if not OPENROUTER_KEY:
+        return await message.reply_text(
+            "❌ `OPENROUTER_KEY` set nahi hai. Deployment platform ke env vars mein daalein."
+        )
+
+    user_id = message.from_user.id if message.from_user else 0
+    model   = _user_models.get(user_id)
+
+    stop_event = asyncio.Event()
+    typing_task = asyncio.create_task(_send_typing(client, message.chat.id, stop_event))
+
+    try:
+        reply = await get_gpt_response(prompt, model=model)
+    except Exception as e:
+        stop_event.set()
+        typing_task.cancel()
+        return await message.reply_text(f"❌ **Error:** `{e}`")
+    finally:
+        stop_event.set()
+        typing_task.cancel()
+
+    for chunk in _chunk(reply):
+        await message.reply_text(chunk)
 
 # ─────────────────────────────────────────────
 # MODEL LIST  (.models)
@@ -263,7 +302,6 @@ async def models_handler(client: Client, message: Message):
 
     await message.reply_text("\n".join(lines))
 
-
 # ─────────────────────────────────────────────
 # SET MODEL  (.model)
 # ─────────────────────────────────────────────
@@ -278,7 +316,6 @@ async def set_model_handler(client: Client, message: Message):
     _user_models[user_id] = model_id
     await message.reply_text(f"✅ Model set to: `{model_id}`")
 
-
 # ─────────────────────────────────────────────
 # RESET MODEL  (.resetmodel)
 # ─────────────────────────────────────────────
@@ -287,7 +324,6 @@ async def reset_model_handler(client: Client, message: Message):
     user_id = message.from_user.id if message.from_user else 0
     _user_models.pop(user_id, None)
     await message.reply_text("✅ Model reset to auto-select.")
-
 
 # ─────────────────────────────────────────────
 # AI HELP
@@ -302,12 +338,13 @@ async def aihelp_handler(client: Client, message: Message):
         "• `/models` — List free models\n"
         "• `/model <id>` — Set model\n"
         "• `/resetmodel` — Reset to auto\n\n"
+        "**💬 Reply Feature:**\n"
+        "Bot ke kisi bhi message ko reply karke direct chat kar sakte hain!\n\n"
         "**Tips:**\n"
         "• Works in 15+ languages (auto-detect)\n"
         "• Free tier, no cost to you\n"
         "• If one model fails, bot auto-switches"
     )
-
 
 # ─────────────────────────────────────────────
 # ERRORS
