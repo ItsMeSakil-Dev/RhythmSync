@@ -76,9 +76,10 @@ async def request_clone(client: Client, message: Message):
 
     status_msg = await message.reply_text("⏳ **Verifying your bot token...**")
 
-    # 4. Verify Token
+    # 4. Verify Token (FIXED: Added await temp_client.start())
     try:
         temp_client = Client(":memory:", api_id=API_ID, api_hash=API_HASH, bot_token=bot_token, in_memory=True)
+        await temp_client.start() # <--- YE LINE MISSING THI
         bot_info = await temp_client.get_me()
         await temp_client.stop()
     except AccessTokenInvalid:
