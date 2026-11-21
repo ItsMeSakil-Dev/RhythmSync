@@ -1,4 +1,3 @@
-
 # ═══════════════════════════════════════════════════════════
 #        🌺 RhythmSync - Premium Clone System 🌺
 #   Path: RHYTHMSYNC/plugins/bot/clone.py
@@ -18,7 +17,6 @@ from RHYTHMSYNC import app
 logger = logging.getLogger("RHYTHMSYNC.clone")
 
 # --- CONFIGURATION ---
-# MONGO_URI config se aayega, direct env se nahi
 from config import MONGO_DB_URI, API_ID, API_HASH, OWNER_ID
 
 # Apne plugins folder ka naam yahan dein
