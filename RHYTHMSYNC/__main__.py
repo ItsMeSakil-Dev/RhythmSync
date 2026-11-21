@@ -253,12 +253,10 @@ async def init():
     LOGGER("RHYTHMSYNC.plugins").info("ᴍᴏᴅᴜʟᴇs ʟᴏᴀᴅᴇᴅ...")
 
     # ═══════════════════════════════════════════════════════════
-    # 🌟 CLONE SYSTEM INITIALIZATION (NEW ADDED)
+    # 🌟 CLONE SYSTEM INITIALIZATION (UPDATED PATH)
     # ═══════════════════════════════════════════════════════════
     try:
-        import clone  # Handlers register karne ke liye
-        from clone import start_cloned_bots
-        
+        from RHYTHMSYNC.plugins.bot.clone import start_cloned_bots
         # Background mein cloned bots ko start karein
         asyncio.create_task(start_cloned_bots())
         LOGGER("RHYTHMSYNC").info("🌟 ᴄʟᴏɴᴇ sʏsᴛᴇᴍ ʟᴏᴀᴅᴇᴅ ✔")
