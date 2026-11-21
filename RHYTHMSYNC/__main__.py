@@ -253,7 +253,7 @@ async def init():
     LOGGER("RHYTHMSYNC.plugins").info("ᴍᴏᴅᴜʟᴇs ʟᴏᴀᴅᴇᴅ...")
 
     # ═══════════════════════════════════════════════════════════
-    # 🌟 CLONE SYSTEM INITIALIZATION (UPDATED PATH)
+    # 🌟 CLONE SYSTEM INITIALIZATION
     # ═══════════════════════════════════════════════════════════
     try:
         from RHYTHMSYNC.plugins.bot.clone import start_cloned_bots
