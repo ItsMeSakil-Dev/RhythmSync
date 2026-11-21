@@ -153,12 +153,7 @@ async def _gc_loop() -> None:
 
 
 async def _cookie_refresh_loop() -> None:
-    """Periodically re-fetch YouTube cookies.
-
-    Cookies are fetched only once at startup; YouTube invalidates them over
-    time, after which every download silently fails (assistant joins the VC
-    but no song ever plays). Refreshing keeps the bot healthy on long uptime.
-    """
+    """Periodically re-fetch YouTube cookies."""
     hours = float(os.environ.get("COOKIE_REFRESH_HOURS", "12"))
     while True:
         await asyncio.sleep(hours * 3600)
@@ -170,12 +165,7 @@ async def _cookie_refresh_loop() -> None:
 
 
 async def _auto_restart_loop(hours: float) -> None:
-    """Optional watchdog: restart the bot process every N hours.
-
-    Long-running bots degrade over time (stale pytgcalls calls, memory
-    growth, dropped sessions). A periodic restart is the standard fix.
-    Enable by setting AUTO_RESTART_HOURS in the environment (e.g. 24).
-    """
+    """Optional watchdog: restart the bot process every N hours."""
     import sys
 
     while True:
@@ -189,17 +179,7 @@ async def _auto_restart_loop(hours: float) -> None:
 
 
 async def _keepalive_ping_loop() -> None:
-    """Render / Koyeb free-tier keep-alive.
-
-    A free web service is spun down after 15 minutes without any inbound
-    traffic, which takes the bot offline. This loop pings our own /health
-    endpoint so inbound requests keep arriving.
-
-    Enable by setting KEEPALIVE_URL to this service's public URL, e.g.
-    https://sakil-music-bot.onrender.com
-    Interval comes from KEEPALIVE_INTERVAL (seconds, default 600 = 10 min,
-    kept safely below Render's 15-minute idle window).
-    """
+    """Render / Koyeb free-tier keep-alive."""
     url = (os.environ.get("KEEPALIVE_URL") or "").strip().rstrip("/")
     if not url:
         return
@@ -228,7 +208,6 @@ async def _keepalive_ping_loop() -> None:
                             f"⚠️ ᴋᴇᴇᴘ-ᴀʟɪᴠᴇ ᴘɪɴɢ ʀᴇᴛᴜʀɴᴇᴅ HTTP {resp.status}"
                         )
         except Exception as e:
-            # Never fatal: a failed ping must not take the bot down.
             LOGGER("RHYTHMSYNC").warning(f"⚠️ ᴋᴇᴇᴘ-ᴀʟɪᴠᴇ ᴘɪɴɢ ꜰᴀɪʟᴇᴅ: {e}")
 
 
@@ -267,20 +246,31 @@ async def init():
         try:
             importlib.import_module("RHYTHMSYNC.plugins" + all_module)
         except Exception as e:
-            # One broken plugin (e.g. missing env key) must never kill the bot.
             LOGGER("RHYTHMSYNC.plugins").error(
                 f"❌ Failed to load module {all_module}: {e}\nBot continues without it."
             )
 
     LOGGER("RHYTHMSYNC.plugins").info("ᴍᴏᴅᴜʟᴇs ʟᴏᴀᴅᴇᴅ...")
 
+    # ═══════════════════════════════════════════════════════════
+    # 🌟 CLONE SYSTEM INITIALIZATION (NEW ADDED)
+    # ═══════════════════════════════════════════════════════════
+    try:
+        import clone  # Handlers register karne ke liye
+        from clone import start_cloned_bots
+        
+        # Background mein cloned bots ko start karein
+        asyncio.create_task(start_cloned_bots())
+        LOGGER("RHYTHMSYNC").info("🌟 ᴄʟᴏɴᴇ sʏsᴛᴇᴍ ʟᴏᴀᴅᴇᴅ ✔")
+    except Exception as e:
+        LOGGER("RHYTHMSYNC").error(f"❌ ᴄʟᴏɴᴇ sʏsᴛᴇᴍ ʟᴏᴀᴅ ꜰᴀɪʟᴇᴅ: {e}")
+    # ═══════════════════════════════════════════════════════════
+
     await userbot.start()
 
-    # ▶️ VC Logger: resume VC join/leave notifications for groups that enabled
-    # it (added in this upgrade pack). Runs only after the assistant is up.
+    # ▶️ VC Logger: resume VC join/leave notifications
     try:
         from RHYTHMSYNC.plugins.tools.vclogger import load_vc_logger_status
-
         asyncio.create_task(load_vc_logger_status())
     except Exception as e:
         LOGGER("RHYTHMSYNC").warning(f"⚠️ ᴠᴄ ʟᴏɢɢᴇʀ ɪɴɪᴛ ғᴀɪʟᴇᴅ: {e}")
@@ -302,9 +292,10 @@ async def init():
     # Long-uptime health: periodic GC, refresh YouTube cookies periodically
     asyncio.create_task(_gc_loop())
     asyncio.create_task(_cookie_refresh_loop())
+    
     # Render/Koyeb free tier: keep the service from spinning down on idle.
-    # No-op unless KEEPALIVE_URL is set.
     asyncio.create_task(_keepalive_ping_loop())
+    
     auto_restart_hours = float(os.environ.get("AUTO_RESTART_HOURS", "0"))
     if auto_restart_hours > 0:
         asyncio.create_task(_auto_restart_loop(auto_restart_hours))
