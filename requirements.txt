@@ -4,6 +4,7 @@ urllib3
 aiohttp
 apscheduler
 bs4
+razorpay
 flask
 gunicorn
 edge-tts
