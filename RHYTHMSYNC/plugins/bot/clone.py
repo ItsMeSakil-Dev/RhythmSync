@@ -20,6 +20,8 @@ from config import MONGO_DB_URI, API_ID, API_HASH, OWNER_ID
 
 # --- CONFIGURATION ---
 logger = logging.getLogger("RHYTHMSYNC.clone")
+
+# Razorpay Credentials Environment Variables se aayenge
 RAZORPAY_KEY = os.environ.get("RAZORPAY_KEY_ID", "")
 RAZORPAY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET", "")
 
@@ -29,27 +31,29 @@ if RAZORPAY_KEY and RAZORPAY_SECRET:
 else:
     razorpay_client = None
 
-# --- DATABASE SETUP ---
+# --- DATABASE SETUP (MongoDB) ---
 mongo_client = AsyncIOMotorClient(MONGO_DB_URI)
 db = mongo_client["RhythmSync"]
 clone_requests = db["clone_requests"]
 cloned_bots = db["cloned_bots"]
 premium_users = db["premium_users"]
 
+# Active processes track karne ke liye
 active_processes = {}
 
 # --- LIMITS & PRICING ---
-FREE_CLONE_LIMIT = 0   # Free Clone Band
+FREE_CLONE_LIMIT = 0   # 🔒 Free Clone Band (0 = koi free bot nahi)
 PREMIUM_CLONE_LIMIT = 3
 PREMIUM_PRICE_RS = 99  # ₹99 Premium Price
 
 # ═══════════════════════════════════════════════════════════
-# 💎 /buypremium COMMAND (Auto-UPI)
+# 💎 /buypremium COMMAND (User se Name puch kar Razorpay Link)
 # ═══════════════════════════════════════════════════════════
 @app.on_message(filters.command(["buypremium", "premium"]) & filters.private)
 async def buy_premium(client: Client, message: Message):
     user_id = message.from_user.id
     
+    # Check karein ki user pehle se premium toh nahi hai
     is_premium = await premium_users.find_one({"user_id": user_id})
     if is_premium:
         return await message.reply_text("✅ **Aap pehle se Premium user hain!**\n\nAap `/clone` karke apna bot bana sakte hain.")
@@ -60,16 +64,42 @@ async def buy_premium(client: Client, message: Message):
             "Owner se contact karein."
         )
 
+    # 1. User se Real Name mangein
+    await message.reply_text(
+        "💎 **RhythmSync Premium**\n\n"
+        "Payment link generate karne ke liye kripya apna **Real Name** (sirf English letters mein) bhejein.\n\n"
+        "❌ _Cancel karne ke liye `/cancel` bhejein._"
+    )
+
+    try:
+        # User ke reply ka wait karein
+        name_msg = await client.listen(message.chat.id, timeout=120, filters=filters.text)
+        
+        if name_msg.text.startswith("/"):
+            return await message.reply_text("❌ Payment process cancelled.")
+
+        raw_name = name_msg.text.strip()
+        
+        # Name se special characters/emojis hatayein (Safety ke liye)
+        clean_name = re.sub(r'[^a-zA-Z0-9\s]', '', raw_name).strip()
+        
+        if len(clean_name) < 2:
+            return await message.reply_text("❌ **Invalid Name!** Kripya apna sahi naam bhejein. (Process Cancelled)")
+
+    except asyncio.TimeoutError:
+        return await message.reply_text("⏳ **Timeout!** Aapne 2 minute tak naam nahi bheja. Process cancel ho gaya.")
+
+    # 2. Payment Link Generate karein
     status_msg = await message.reply_text("⏳ **Creating Payment Link...**")
 
     try:
         payment_link = razorpay_client.payment_link.create({
-            "amount": PREMIUM_PRICE_RS * 100,  # ₹99 in paise
+            "amount": PREMIUM_PRICE_RS * 100,  # Amount paise mein (₹99 = 9900)
             "currency": "INR",
             "accept_partial": False,
             "description": "RhythmSync Premium (3 Bots)",
             "customer": {
-                "name": message.from_user.first_name,
+                "name": clean_name,  # 👈 User ka dala hua naam
                 "contact": str(user_id)
             },
             "notify": {"sms": False, "email": False},
@@ -90,6 +120,7 @@ async def buy_premium(client: Client, message: Message):
 
         await status_msg.edit_text(
             f"💎 **RhythmSync Premium**\n\n"
+            f"**👤 Name:** {clean_name}\n"
             f"**💰 Amount:** ₹{PREMIUM_PRICE_RS}\n"
             f"**🎁 Benefits:**\n"
             f"• {PREMIUM_CLONE_LIMIT} Clone Bots (100% Same as Main Bot)\n"
@@ -102,6 +133,9 @@ async def buy_premium(client: Client, message: Message):
         logger.error(f"Razorpay Error: {e}")
         await status_msg.edit_text(f"❌ **Error:** `{e}`")
 
+# ═══════════════════════════════════════════════════════════
+# 🔄 CHECK PAYMENT STATUS HANDLER
+# ═══════════════════════════════════════════════════════════
 @app.on_callback_query(filters.regex(r"^check_pay_"))
 async def check_payment_status(client: Client, query: CallbackQuery):
     user_id = query.from_user.id
@@ -111,10 +145,10 @@ async def check_payment_status(client: Client, query: CallbackQuery):
         await query.message.edit_text("✅ **Payment Successful!**\n\nAap ab Premium hain. `/clone` bhej kar bot banayein.")
         return await query.answer("Premium Active!", show_alert=True)
     
-    await query.answer("⚠️ Payment abhi receive nahi hui. Kripya payment complete karein.", show_alert=True)
+    await query.answer("⚠️ Payment abhi receive nahi hui. Kripya payment complete karein ya 1-2 min wait karein.", show_alert=True)
 
 # ═══════════════════════════════════════════════════════════
-# 1. /clone COMMAND
+# 1. /clone COMMAND (Token -> Verify -> Session -> Verify)
 # ═══════════════════════════════════════════════════════════
 @app.on_message(filters.command("clone") & filters.private)
 async def request_clone(client: Client, message: Message):
@@ -122,7 +156,7 @@ async def request_clone(client: Client, message: Message):
 
     is_premium = await premium_users.find_one({"user_id": user_id})
     
-    # 1. Block Free Users (Since Limit is 0)
+    # 🔒 Block Free Users (Kyunki limit 0 hai)
     if not is_premium:
         return await message.reply_text(
             "🔒 **Clone Feature is Premium Only!**\n\n"
@@ -197,15 +231,15 @@ async def request_clone(client: Client, message: Message):
     except asyncio.TimeoutError:
         return await message.reply_text("⏳ **Timeout!** Process cancelled.")
 
-    # Premium users get instant approval (No owner button needed)
+    # Premium users get instant approval
     await process_approval(client, user_id, bot_token, string_session, bot_info.username)
 
 # ═══════════════════════════════════════════════════════════
-# 2. CANCEL COMMAND
+# 2. /cancel COMMAND
 # ═══════════════════════════════════════════════════════════
 @app.on_message(filters.command("cancel") & filters.private)
 async def cancel_clone(client: Client, message: Message):
-    await message.reply_text("✅ Process cancelled.")
+    await message.reply_text("✅ Process cancelled. (Agar koi chal raha tha)")
 
 # ═══════════════════════════════════════════════════════════
 # 3. PROCESS APPROVAL (Start Subprocess)
@@ -220,6 +254,7 @@ async def process_approval(client, user_id, bot_token, string_session, bot_usern
         env["OWNER_ID"] = str(user_id)
         env["BOT_NAME"] = f"{bot_username} Clone"
 
+        # Naya bot process start karein
         process = subprocess.Popen([sys.executable, "-m", "RHYTHMSYNC"], env=env)
         active_processes[bot_username] = process
 
