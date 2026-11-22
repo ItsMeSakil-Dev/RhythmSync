@@ -26,7 +26,7 @@ from pytgcalls.exceptions import NoActiveGroupCall
 # ----------------------🔹 Render / Web Flask Dashboard 🔹----------------------
 def keep_alive():
     try:
-        from flask import Flask, jsonify
+        from flask import Flask, jsonify, request
         from pymongo import MongoClient
     except ImportError:
         return
@@ -111,28 +111,75 @@ body{{font-family:'Segoe UI',sans-serif;background:linear-gradient(135deg,#0f0c2
 <div class="f"><p>Auto-refreshes every 30s</p><p style="margin-top:8px"><a href="https://t.me/{bot_username}">Open Bot</a> • <a href="https://t.me/Vip_Sakil_Bio">Developer</a></p></div>
 </div></body></html>"""
             except Exception as e:
-                logging.getLogger("RHYTHMSYNC").error(f"Flask home error: {e}")
                 return f"Error: {str(e)}", 500
 
         @fapp.route('/health')
         def health():
             return "OK", 200
 
-        @fapp.route('/api/stats')
-        def api_stats():
-            if _sync_db is None:
-                return jsonify({"error": "DB not connected", "status": "error"}), 200
-            try:
-                return jsonify({
-                    "users": _sync_db.tgusersdb.count_documents({}),
-                    "chats": _sync_db.chats.count_documents({}),
-                    "banned": _sync_db.blockedusers.count_documents({}),
-                    "uptime": int(time.time() - _start_time),
-                    "status": "running"
-                })
-            except Exception as e:
-                logging.getLogger("RHYTHMSYNC").error(f"Flask API stats error: {e}")
-                return jsonify({"error": str(e), "status": "error"}), 200
+        # ═══════════════════════════════════════════════════════
+        # 💳 RAZORPAY WEBHOOK (AUTO UPI PAYMENT)
+        # ═══════════════════════════════════════════════════════
+        @fapp.route('/razorpay_webhook', methods=['POST'])
+        def razorpay_webhook():
+            import hmac
+            import hashlib
+            
+            webhook_secret = os.environ.get("RAZORPAY_WEBHOOK_SECRET", "")
+            webhook_signature = request.headers.get('X-Razorpay-Signature')
+            webhook_body = request.get_data()
+            
+            if not webhook_secret:
+                return jsonify({"status": "error", "message": "Webhook secret not set"}), 500
+
+            expected_signature = hmac.new(
+                webhook_secret.encode('utf-8'),
+                webhook_body,
+                hashlib.sha256
+            ).hexdigest()
+
+            if webhook_signature != expected_signature:
+                return jsonify({"status": "invalid signature"}), 400
+
+            data = request.json
+            event = data.get('event')
+
+            if event == 'payment.captured':
+                payload = data['payload']['payment']['entity']
+                payment_id = payload['id']
+                amount = payload['amount'] / 100
+                notes = payload.get('notes', {})
+                user_id = int(notes.get('user_id', 0))
+
+                if user_id and _sync_db is not None:
+                    # Database mein premium add karein
+                    _sync_db.premium_users.update_one(
+                        {"user_id": user_id},
+                        {"$set": {"user_id": user_id, "payment_id": payment_id, "amount": amount}},
+                        upsert=True
+                    )
+                    LOGGER("RHYTHMSYNC").info(f"[AUTO-UPI] Premium granted to {user_id} via Razorpay {payment_id}")
+
+                    # User ko telegram par message bhejein
+                    from RHYTHMSYNC import app
+                    import asyncio
+                    
+                    async def notify_user():
+                        try:
+                            await app.send_message(
+                                user_id,
+                                f"🎉 **Payment Successful!**\n\n"
+                                f"Aapka payment (₹{amount}) receive ho gaya hai.\n"
+                                f"Aap ab **Premium Member** hain!\n\n"
+                                f"**Transaction ID:** `{payment_id}`\n"
+                                f"Ab aap `/clone` command bhej kar apna bot bana sakte hain."
+                            )
+                        except Exception as e:
+                            LOGGER("RHYTHMSYNC").error(f"Message send failed: {e}")
+
+                    asyncio.run_coroutine_threadsafe(notify_user(), app.loop)
+
+            return jsonify({"status": "success"}), 200
 
         port = int(os.environ.get("PORT", 3000))
         fapp.run(host="0.0.0.0", port=port)
@@ -141,19 +188,16 @@ body{{font-family:'Segoe UI',sans-serif;background:linear-gradient(135deg,#0f0c2
     t.daemon = True
     t.start()
 
-# Start Flask Web server immediately for Render port binding
 keep_alive()
 
 
 async def _gc_loop() -> None:
-    """Periodic garbage collection loop to keep RAM footprint low and clean memory leaks."""
     while True:
-        await asyncio.sleep(600)  # Every 10 mins
+        await asyncio.sleep(600)
         gc.collect()
 
 
 async def _cookie_refresh_loop() -> None:
-    """Periodically re-fetch YouTube cookies."""
     hours = float(os.environ.get("COOKIE_REFRESH_HOURS", "12"))
     while True:
         await asyncio.sleep(hours * 3600)
@@ -165,9 +209,7 @@ async def _cookie_refresh_loop() -> None:
 
 
 async def _auto_restart_loop(hours: float) -> None:
-    """Optional watchdog: restart the bot process every N hours."""
     import sys
-
     while True:
         await asyncio.sleep(hours * 3600)
         LOGGER("RHYTHMSYNC").info(f"🔄 ᴀᴜᴛᴏ-ʀᴇꜱᴛᴀʀᴛ ᴀꜰᴛᴇʀ {hours}h ᴏꜰ ᴜᴘᴛɪᴍᴇ...")
@@ -179,55 +221,35 @@ async def _auto_restart_loop(hours: float) -> None:
 
 
 async def _keepalive_ping_loop() -> None:
-    """Render / Koyeb free-tier keep-alive."""
     url = (os.environ.get("KEEPALIVE_URL") or "").strip().rstrip("/")
     if not url:
         return
-
     try:
         interval = max(60, int(os.environ.get("KEEPALIVE_INTERVAL", "600")))
     except (TypeError, ValueError):
         interval = 600
-
     target = f"{url}/health"
-    LOGGER("RHYTHMSYNC").info(
-        f"🩺 ᴋᴇᴇᴘ-ᴀʟɪᴠᴇ ᴇɴᴀʙʟᴇᴅ: ᴘɪɴɢɪɴɢ {target} ᴇᴠᴇʀʏ {interval}s"
-    )
-
     import aiohttp
-
     while True:
         await asyncio.sleep(interval)
         try:
-            async with aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=30)
-            ) as session:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
                 async with session.get(target) as resp:
                     if resp.status != 200:
-                        LOGGER("RHYTHMSYNC").warning(
-                            f"⚠️ ᴋᴇᴇᴘ-ᴀʟɪᴠᴇ ᴘɪɴɢ ʀᴇᴛᴜʀɴᴇᴅ HTTP {resp.status}"
-                        )
+                        LOGGER("RHYTHMSYNC").warning(f"⚠️ ᴋᴇᴇᴘ-ᴀʟɪᴠᴇ ᴘɪɴɢ ʀᴇᴛᴜʀɴᴇᴅ HTTP {resp.status}")
         except Exception as e:
             LOGGER("RHYTHMSYNC").warning(f"⚠️ ᴋᴇᴇᴘ-ᴀʟɪᴠᴇ ᴘɪɴɢ ꜰᴀɪʟᴇᴅ: {e}")
 
 
 async def init():
-    if (
-        not config.STRING1
-        and not config.STRING2
-        and not config.STRING3
-        and not config.STRING4
-        and not config.STRING5
-    ):
-        LOGGER(__name__).error("ᴀssɪsᴛᴀɴᴛ sᴇssɪᴏɴ ɴᴏᴛ ғɪʟʟᴇᴅ, ᴘʟᴇᴀsᴇ ғɪʟʟ ᴀ ᴘʏʀᴏɢʀᴀᴍ sᴇssɪᴏɴ...")
+    if not config.STRING1 and not config.STRING2 and not config.STRING3 and not config.STRING4 and not config.STRING5:
+        LOGGER(__name__).error("ᴀssɪsᴛᴀɴᴛ sᴇssɪᴏɴ ɴᴏᴛ ғɪʟʟᴇᴅ...")
         exit()
 
-    # ✅ Try to fetch cookies at startup
     try:
         await fetch_and_store_cookies()
-        LOGGER("RHYTHMSYNC").info("ʏᴏᴜᴛᴜʙᴇ ᴄᴏᴏᴋɪᴇs ʟᴏᴀᴅᴇᴅ sᴜᴄᴄᴇssғᴜʟʟʏ ✅")
     except Exception as e:
-        LOGGER("RHYTHMSYNC").warning(f"⚠️ ᴄᴏᴏᴋɪᴇ ᴇʀʀᴏʀ: {e}")
+        pass
 
     await sudo()
 
@@ -238,78 +260,56 @@ async def init():
         users = await get_banned_users()
         for user_id in users:
             BANNED_USERS.add(user_id)
-    except:
-        pass
+    except: pass
 
     await app.start()
+    
     for all_module in ALL_MODULES:
         try:
             importlib.import_module("RHYTHMSYNC.plugins" + all_module)
         except Exception as e:
-            LOGGER("RHYTHMSYNC.plugins").error(
-                f"❌ Failed to load module {all_module}: {e}\nBot continues without it."
-            )
+            LOGGER("RHYTHMSYNC.plugins").error(f"❌ Failed to load module {all_module}: {e}")
 
     LOGGER("RHYTHMSYNC.plugins").info("ᴍᴏᴅᴜʟᴇs ʟᴏᴀᴅᴇᴅ...")
 
-    # ═══════════════════════════════════════════════════════════
     # 🌟 CLONE SYSTEM INITIALIZATION
-    # ═══════════════════════════════════════════════════════════
     try:
         from RHYTHMSYNC.plugins.bot.clone import start_cloned_bots
-        # Background mein cloned bots ko start karein
         asyncio.create_task(start_cloned_bots())
         LOGGER("RHYTHMSYNC").info("🌟 ᴄʟᴏɴᴇ sʏsᴛᴇᴍ ʟᴏᴀᴅᴇᴅ ✔")
     except Exception as e:
         LOGGER("RHYTHMSYNC").error(f"❌ ᴄʟᴏɴᴇ sʏsᴛᴇᴍ ʟᴏᴀᴅ ꜰᴀɪʟᴇᴅ: {e}")
-    # ═══════════════════════════════════════════════════════════
 
     await userbot.start()
 
-    # ▶️ VC Logger: resume VC join/leave notifications
     try:
         from RHYTHMSYNC.plugins.tools.vclogger import load_vc_logger_status
         asyncio.create_task(load_vc_logger_status())
     except Exception as e:
-        LOGGER("RHYTHMSYNC").warning(f"⚠️ ᴠᴄ ʟᴏɢɢᴇʀ ɪɴɪᴛ ғᴀɪʟᴇᴅ: {e}")
+        pass
 
     await SAKIL.start()
 
     try:
         await SAKIL.stream_call("https://files.catbox.moe/euj0oc.mp4")
     except NoActiveGroupCall:
-        LOGGER("RHYTHMSYNC").error(
-            "ᴘʟᴇᴀsᴇ ᴛᴜʀɴ ᴏɴ ᴛʜᴇ ᴠᴏɪᴄᴇ ᴄʜᴀᴛ ᴏғ ʏᴏᴜʀ ʟᴏɢ ɢʀᴏᴜᴘ/ᴄʜᴀɴɴᴇʟ.\n\nʙᴏᴛ sᴛᴏᴘᴘᴇᴅ..."
-        )
-        exit()
-    except:
         pass
+    except: pass
 
     await SAKIL.decorators()
 
-    # Long-uptime health: periodic GC, refresh YouTube cookies periodically
     asyncio.create_task(_gc_loop())
     asyncio.create_task(_cookie_refresh_loop())
-    
-    # Render/Koyeb free tier: keep the service from spinning down on idle.
     asyncio.create_task(_keepalive_ping_loop())
     
     auto_restart_hours = float(os.environ.get("AUTO_RESTART_HOURS", "0"))
     if auto_restart_hours > 0:
         asyncio.create_task(_auto_restart_loop(auto_restart_hours))
-        LOGGER("RHYTHMSYNC").info(f"🔄 ᴀᴜᴛᴏ-ʀᴇꜱᴛᴀʀᴛ ᴇɴᴀʙʟᴇᴅ: ᴇᴠᴇʀʏ {auto_restart_hours}h")
 
     LOGGER("RHYTHMSYNC").info("✅ Sakil music Bot Started Successfully!")
     await idle()
     await app.stop()
     await userbot.stop()
-    LOGGER("RHYTHMSYNC").info("sᴛᴏᴘᴘɪɴɢ ᴍᴜsɪᴄ ʙᴏᴛ ...")
-
 
 if __name__ == "__main__":
     asyncio.get_event_loop().run_until_complete(init())
-
-# ═══════════════════════════════════════════════════════════
-#         🌺 RhythmSync 🌺
-#   github.com/SunloMusicOfficial/RhythmSync
-# ═══════════════════════════════════════════════════════════
