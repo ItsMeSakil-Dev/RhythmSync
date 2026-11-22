@@ -39,16 +39,15 @@ premium_users = db["premium_users"]
 active_processes = {}
 
 # --- LIMITS & PRICING ---
-FREE_CLONE_LIMIT = 0   # 🔒 Free Clone Band
+FREE_CLONE_LIMIT = 0
 PREMIUM_CLONE_LIMIT = 3
-PREMIUM_PRICE_RS = 99  # ₹99 Premium Price
+PREMIUM_PRICE_RS = 99
 
-# --- STATE MACHINE DICTIONARY ---
-# Ye user ka current step yaad rakhega (Name, Token, Session)
+# --- STATE MACHINE ---
 user_states = {}
 
 # ═══════════════════════════════════════════════════════════
-# 💎 /buypremium COMMAND (Start State)
+# 💎 /buypremium COMMAND
 # ═══════════════════════════════════════════════════════════
 @app.on_message(filters.command(["buypremium", "premium"]) & filters.private)
 async def buy_premium(client: Client, message: Message):
@@ -61,7 +60,6 @@ async def buy_premium(client: Client, message: Message):
     if not razorpay_client:
         return await message.reply_text("⚠️ **Payment Gateway Configure Nahi Hai.** Owner se contact karein.")
 
-    # Set State to WAITING_NAME
     user_states[user_id] = {"step": "WAITING_NAME"}
 
     await message.reply_text(
@@ -71,7 +69,7 @@ async def buy_premium(client: Client, message: Message):
     )
 
 # ═══════════════════════════════════════════════════════════
-# 🤖 /clone COMMAND (Start State)
+# 🤖 /clone COMMAND
 # ═══════════════════════════════════════════════════════════
 @app.on_message(filters.command("clone") & filters.private)
 async def request_clone(client: Client, message: Message):
@@ -93,7 +91,6 @@ async def request_clone(client: Client, message: Message):
             f"Purana bot delete karein: `/mybots`"
         )
 
-    # Set State to WAITING_TOKEN
     user_states[user_id] = {"step": "WAITING_TOKEN"}
 
     await message.reply_text(
@@ -115,21 +112,19 @@ async def cancel_clone(client: Client, message: Message):
         await message.reply_text("❌ Aapka koi process nahi chal raha tha.")
 
 # ═══════════════════════════════════════════════════════════
-# 🧠 STATE HANDLER (Yahan user ke text messages process honge)
+# 🧠 STATE HANDLER
 # ═══════════════════════════════════════════════════════════
-# Ye handler sirf un messages ko pakdega jo commands (/) nahi hain
 @app.on_message(filters.private & filters.text & ~filters.regex(r"^/"))
 async def handle_user_states(client: Client, message: Message):
     user_id = message.from_user.id
     
-    # Agar user ka koi state nahi hai, toh ignore karo
     if user_id not in user_states:
         return
         
     current_step = user_states[user_id].get("step")
     text = message.text.strip()
 
-    # 1. Name Process Karein
+    # 1. Name Process
     if current_step == "WAITING_NAME":
         clean_name = re.sub(r'[^a-zA-Z0-9\s]', '', text).strip()
         if len(clean_name) < 2:
@@ -173,10 +168,10 @@ async def handle_user_states(client: Client, message: Message):
             logger.error(f"Razorpay Error: {e}")
             await status_msg.edit_text(f"❌ **Error:** `{e}`")
             
-        # Process complete, state clear karein
-        del user_states[user_id]
+        if user_id in user_states:
+            del user_states[user_id]
 
-    # 2. Token Process Karein
+    # 2. Token Process
     elif current_step == "WAITING_TOKEN":
         bot_token = text
         if not re.match(r'\d[0-9]{8,10}:[0-9A-Za-z_-]{35}', bot_token):
@@ -192,7 +187,6 @@ async def handle_user_states(client: Client, message: Message):
         except Exception as e:
             return await status_msg.edit_text(f"❌ **Invalid Token!** `{e}`\nDubara try karein ya `/cancel` karein.")
 
-        # Token sahi hai, ab state ko SESSION par shift karein
         user_states[user_id] = {
             "step": "WAITING_SESSION",
             "token": bot_token,
@@ -201,7 +195,7 @@ async def handle_user_states(client: Client, message: Message):
 
         await status_msg.edit_text(f"✅ **Token Verified!** (Bot: @{bot_info.username})\n\n**Step 2:** Ab apna **String Session** bhejein.\n_(Music ke liye zaroori)_")
 
-    # 3. Session Process Karein
+    # 3. Session Process
     elif current_step == "WAITING_SESSION":
         string_session = text
         status_msg = await message.reply_text("⏳ **Verifying String Session...**")
@@ -215,12 +209,11 @@ async def handle_user_states(client: Client, message: Message):
 
         await status_msg.edit_text("✅ **Session Verified!**\n\n⏳ Starting your bot...")
 
-        # Data retrieve karein aur bot start karein
         data = user_states[user_id]
         await process_approval(client, user_id, data["token"], string_session, data["bot_username"])
         
-        # State clear karein
-        del user_states[user_id]
+        if user_id in user_states:
+            del user_states[user_id]
 
 # ═══════════════════════════════════════════════════════════
 # 🔄 CHECK PAYMENT STATUS
@@ -237,7 +230,7 @@ async def check_payment_status(client: Client, query: CallbackQuery):
     await query.answer("⚠️ Payment abhi receive nahi hui. Kripya payment complete karein ya 1-2 min wait karein.", show_alert=True)
 
 # ═══════════════════════════════════════════════════════════
-# ⚙️ PROCESS APPROVAL (Start Subprocess)
+# ⚙️ PROCESS APPROVAL
 # ═══════════════════════════════════════════════════════════
 async def process_approval(client, user_id, bot_token, string_session, bot_username):
     try:
@@ -260,18 +253,22 @@ async def process_approval(client, user_id, bot_token, string_session, bot_usern
 
         msg = f"🎉 **Badhai Ho!**\n\nAapka bot @{bot_username} live ho gaya hai.\nAb us bot me `/start` karein."
         
-        try: await client.send_message(user_id, msg)
-        except: pass
+        try:
+            await client.send_message(user_id, msg)
+        except:
+            pass
         
         logger.info(f"Started {bot_username} on PORT {port}")
 
     except Exception as e:
         logger.error(f"Error: {e}")
-        try: await client.send_message(user_id, f"❌ Error starting bot: `{e}`")
-        except: pass
+        try:
+            await client.send_message(user_id, f"❌ Error starting bot: `{e}`")
+        except:
+            pass
 
 # ═══════════════════════════════════════════════════════════
-# 👤 USER COMMANDS: /mybots & /delbot
+# 👤 USER COMMANDS
 # ═══════════════════════════════════════════════════════════
 @app.on_message(filters.command("mybots") & filters.private)
 async def my_bots(client: Client, message: Message):
@@ -297,10 +294,11 @@ async def delete_bot(client: Client, message: Message):
         return await message.reply_text("❌ Bot nahi mila.")
     
     if bot_username in active_processes:
-        try: 
+        try:
             active_processes[bot_username].terminate()
             del active_processes[bot_username]
-        except: pass
+        except:
+            pass
     
     await cloned_bots.delete_one({"bot_username": bot_username})
     await message.reply_text(f"✅ Bot @{bot_username} deleted.")
@@ -310,22 +308,30 @@ async def delete_bot(client: Client, message: Message):
 # ═══════════════════════════════════════════════════════════
 @app.on_message(filters.command("addpremium") & filters.user(OWNER_ID))
 async def add_premium(client: Client, message: Message):
-    if len(message.command) < 2: 
+    if len(message.command) < 2:
         return await message.reply_text("**Usage:** `/addpremium <user_id>`")
-    try: target_id = int(message.command[1])
-    except: return await message.reply_text("❌ Invalid ID!")
+        
+    try:
+        target_id = int(message.command[1])
+    except ValueError:
+        return await message.reply_text("❌ Invalid ID!")
     
     await premium_users.update_one({"user_id": target_id}, {"$set": {"user_id": target_id}}, upsert=True)
     await message.reply_text(f"✅ User `{target_id}` is now Premium.")
-    try: await client.send_message(target_id, f"🎉 **Aapko Premium mil gaya!**\n\nAb aap {PREMIUM_CLONE_LIMIT} bots bana sakte hain.")
-    except: pass
+    try:
+        await client.send_message(target_id, f"🎉 **Aapko Premium mil gaya!**\n\nAb aap {PREMIUM_CLONE_LIMIT} bots bana sakte hain.")
+    except:
+        pass
 
 @app.on_message(filters.command("rempremium") & filters.user(OWNER_ID))
 async def remove_premium(client: Client, message: Message):
-    if len(message.command) < 2: 
+    if len(message.command) < 2:
         return await message.reply_text("**Usage:** `/rempremium <user_id>`")
-    try: target_id = int(message.command[1])
-    except: return await message.reply_text("❌ Invalid ID!")
+        
+    try:
+        target_id = int(message.command[1])
+    except ValueError:
+        return await message.reply_text("❌ Invalid ID!")
     
     await premium_users.delete_one({"user_id": target_id})
     await message.reply_text(f"❌ User `{target_id}` premium removed.")
@@ -359,4 +365,4 @@ async def start_cloned_bots():
             active_processes[bot_data["bot_username"]] = process
             logger.info(f"[Clone] Restarted {bot_data['bot_username']}")
         except Exception as e:
-            logger.error(f"[Clone] Failed: {e}")l
+            logger.error(f"[Clone] Failed: {e}")
