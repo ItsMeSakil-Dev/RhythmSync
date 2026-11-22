@@ -10,6 +10,8 @@ import random
 import asyncio
 import logging
 import subprocess
+import qrcode
+from io import BytesIO
 import razorpay
 from pyrogram import Client, filters
 from pyrogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
@@ -18,11 +20,12 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from RHYTHMSYNC import app
 from config import MONGO_DB_URI, API_ID, API_HASH, OWNER_ID
 
-# --- CONFIGURATION ---
 logger = logging.getLogger("RHYTHMSYNC.clone")
 
+# --- RAZORPAY & UPI CONFIGURATION ---
 RAZORPAY_KEY = os.environ.get("RAZORPAY_KEY_ID", "")
 RAZORPAY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET", "")
+UPI_ID = os.environ.get("UPI_ID", "yourupi@paytm")
 
 if RAZORPAY_KEY and RAZORPAY_SECRET:
     razorpay_client = razorpay.Client(auth=(RAZORPAY_KEY, RAZORPAY_SECRET))
@@ -37,17 +40,13 @@ cloned_bots = db["cloned_bots"]
 premium_users = db["premium_users"]
 
 active_processes = {}
-
-# --- LIMITS & PRICING ---
 FREE_CLONE_LIMIT = 0
 PREMIUM_CLONE_LIMIT = 3
 PREMIUM_PRICE_RS = 99
-
-# --- STATE MACHINE ---
 user_states = {}
 
 # ═══════════════════════════════════════════════════════════
-# 💎 /buypremium COMMAND
+# 💎 /buypremium COMMAND (Direct QR & UPI in Telegram)
 # ═══════════════════════════════════════════════════════════
 @app.on_message(filters.command(["buypremium", "premium"]) & filters.private)
 async def buy_premium(client: Client, message: Message):
@@ -55,21 +54,113 @@ async def buy_premium(client: Client, message: Message):
     
     is_premium = await premium_users.find_one({"user_id": user_id})
     if is_premium:
-        return await message.reply_text("✅ **Aap pehle se Premium user hain!**\n\nAap `/clone` karke apna bot bana sakte hain.")
+        return await message.reply_text("✅ **Aap pehle se Premium user hain!**")
 
     if not razorpay_client:
-        return await message.reply_text("⚠️ **Payment Gateway Configure Nahi Hai.** Owner se contact karein.")
+        return await message.reply_text("⚠️ **Payment Gateway Configure Nahi Hai.**")
 
     user_states[user_id] = {"step": "WAITING_NAME"}
-
-    await message.reply_text(
-        "💎 **RhythmSync Premium**\n\n"
-        "Payment link generate karne ke liye kripya apna **Real Name** (sirf English letters mein) bhejein.\n\n"
-        "❌ _Cancel karne ke liye `/cancel` bhejein._"
-    )
+    await message.reply_text("💎 **RhythmSync Premium**\n\nQR Code aur UPI ID generate karne ke liye apna **Real Name** (English mein) bhejein.")
 
 # ═══════════════════════════════════════════════════════════
-# 🤖 /clone COMMAND
+# 🧠 STATE HANDLER (Name -> Razorpay QR Generation)
+# ═══════════════════════════════════════════════════════════
+@app.on_message(filters.private & filters.text & ~filters.regex(r"^/"))
+async def handle_user_states(client: Client, message: Message):
+    user_id = message.from_user.id
+    if user_id not in user_states:
+        return
+        
+    current_step = user_states[user_id].get("step")
+    text = message.text.strip()
+
+    if current_step == "WAITING_NAME":
+        clean_name = re.sub(r'[^a-zA-Z0-9\s]', '', text).strip()
+        if len(clean_name) < 2:
+            return await message.reply_text("❌ **Invalid Name!** Kripya sahi naam bhejein.")
+
+        status_msg = await message.reply_text("⏳ **Generating Unique QR & UPI ID...**")
+
+        try:
+            # 1. Razorpay Payment Link Create Karein (Isse unique QR/UPI milega)
+            payment_link = razorpay_client.payment_link.create({
+                "amount": PREMIUM_PRICE_RS * 100,  # ₹99
+                "currency": "INR",
+                "accept_partial": False,
+                "description": f"RhythmSync Premium - {clean_name}",
+                "customer": {
+                    "name": clean_name,
+                    "contact": str(user_id)
+                },
+                "notify": {"sms": False, "email": False},
+                "reminder_enable": True,
+                "notes": {
+                    "user_id": str(user_id),
+                    "plan": "premium"
+                }
+            })
+
+            pay_url = payment_link['short_url']
+            payment_id = payment_link['id']
+
+            # 2. QR Code Generate Karein (Razorpay ke payment link ka)
+            qr = qrcode.QRCode(version=1, box_size=10, border=5)
+            qr.add_data(pay_url)
+            qr.make(fit=True)
+            qr_img = qr.make_image(fill_color="black", back_color="white")
+            
+            bio = BytesIO()
+            qr_img.save(bio, format="PNG")
+            bio.seek(0)
+            bio.name = "razorpay_qr.png"
+
+            # 3. Buttons (UPI ID Copy + Check Status)
+            buttons = InlineKeyboardMarkup([
+                [InlineKeyboardButton("💳 Pay on Razorpay (UPI/Card)", url=pay_url)],
+                [InlineKeyboardButton("🔄 Check Payment Status", callback_data=f"check_pay_{payment_id}")]
+            ])
+
+            caption_text = (
+                f"💎 **RhythmSync Premium**\n\n"
+                f"**👤 Name:** {clean_name}\n"
+                f"**💰 Amount:** ₹{PREMIUM_PRICE_RS}\n\n"
+                f"**📱 QR Code scan karein** ya **UPI ID** par pay karein:\n"
+                f"**UPI ID:** `{UPI_ID}`\n\n"
+                f"_(Payment successful hote hi premium auto-activate ho jayega)_"
+            )
+
+            await status_msg.delete()
+            await message.reply_photo(
+                photo=bio,
+                caption=caption_text,
+                reply_markup=buttons
+            )
+
+            user_states[user_id] = {
+                "step": "WAITING_PAYMENT",
+                "payment_id": payment_id
+            }
+
+        except Exception as e:
+            logger.error(f"QR Generation Error: {e}")
+            await status_msg.edit_text(f"❌ **Error:** `{e}`")
+
+# ═══════════════════════════════════════════════════════════
+# 🔄 CHECK PAYMENT STATUS (Manual Check via Webhook)
+# ═══════════════════════════════════════════════════════════
+@app.on_callback_query(filters.regex(r"^check_pay_"))
+async def check_payment_status(client: Client, query: CallbackQuery):
+    user_id = query.from_user.id
+    is_premium = await premium_users.find_one({"user_id": user_id})
+    
+    if is_premium:
+        await query.message.edit_text("✅ **Payment Successful!**\n\nAap ab Premium hain. `/clone` bhej kar bot banayein.")
+        return await query.answer("Premium Active!", show_alert=True)
+    
+    await query.answer("⚠️ Payment abhi receive nahi hui. Kripya payment complete karein ya 1-2 min wait karein.", show_alert=True)
+
+# ═══════════════════════════════════════════════════════════
+# 🤖 /clone COMMAND (Premium Only)
 # ═══════════════════════════════════════════════════════════
 @app.on_message(filters.command("clone") & filters.private)
 async def request_clone(client: Client, message: Message):
@@ -86,283 +177,9 @@ async def request_clone(client: Client, message: Message):
 
     user_bots = await cloned_bots.count_documents({"user_id": user_id})
     if user_bots >= PREMIUM_CLONE_LIMIT:
-        return await message.reply_text(
-            f"❌ **Limit Reached!** Aapne apni limit ({PREMIUM_CLONE_LIMIT} bots) reach kar li hai.\n"
-            f"Purana bot delete karein: `/mybots`"
-        )
+        return await message.reply_text(f"❌ **Limit Reached!** Aapne {PREMIUM_CLONE_LIMIT} bots bana liye hain.")
 
     user_states[user_id] = {"step": "WAITING_TOKEN"}
+    await message.reply_text("🤖 **Cloning Started!**\n\n**Step 1:** Apna **Bot Token** bhejein (@BotFather se).\n❌ _Cancel: `/cancel`_")
 
-    await message.reply_text(
-        "🤖 **Premium Cloning Started!**\n\n"
-        "**Step 1:** Kripya apna **Bot Token** bhejein (@BotFather se).\n\n"
-        "❌ _Cancel karne ke liye `/cancel` bhejein._"
-    )
-
-# ═══════════════════════════════════════════════════════════
-# ❌ /cancel COMMAND
-# ═══════════════════════════════════════════════════════════
-@app.on_message(filters.command("cancel") & filters.private)
-async def cancel_clone(client: Client, message: Message):
-    user_id = message.from_user.id
-    if user_id in user_states:
-        del user_states[user_id]
-        await message.reply_text("✅ Aapka process cancel kar diya gaya hai.")
-    else:
-        await message.reply_text("❌ Aapka koi process nahi chal raha tha.")
-
-# ═══════════════════════════════════════════════════════════
-# 🧠 STATE HANDLER
-# ═══════════════════════════════════════════════════════════
-@app.on_message(filters.private & filters.text & ~filters.regex(r"^/"))
-async def handle_user_states(client: Client, message: Message):
-    user_id = message.from_user.id
-    
-    if user_id not in user_states:
-        return
-        
-    current_step = user_states[user_id].get("step")
-    text = message.text.strip()
-
-    # 1. Name Process
-    if current_step == "WAITING_NAME":
-        clean_name = re.sub(r'[^a-zA-Z0-9\s]', '', text).strip()
-        if len(clean_name) < 2:
-            return await message.reply_text("❌ **Invalid Name!** Kripya apna sahi naam (English letters) bhejein ya `/cancel` karein.")
-
-        status_msg = await message.reply_text("⏳ **Creating Payment Link...**")
-
-        try:
-            payment_link = razorpay_client.payment_link.create({
-                "amount": PREMIUM_PRICE_RS * 100,
-                "currency": "INR",
-                "accept_partial": False,
-                "description": "RhythmSync Premium (3 Bots)",
-                "customer": {
-                    "name": clean_name,
-                    "contact": str(user_id)
-                },
-                "notify": {"sms": False, "email": False},
-                "reminder_enable": True,
-                "notes": {"user_id": str(user_id), "plan": "premium"}
-            })
-
-            pay_url = payment_link['short_url']
-            payment_id = payment_link['id']
-
-            buttons = InlineKeyboardMarkup([
-                [InlineKeyboardButton("💳 Pay ₹99 Now", url=pay_url)],
-                [InlineKeyboardButton("🔄 Check Payment Status", callback_data=f"check_pay_{payment_id}")]
-            ])
-
-            await status_msg.edit_text(
-                f"💎 **RhythmSync Premium**\n\n"
-                f"**👤 Name:** {clean_name}\n"
-                f"**💰 Amount:** ₹{PREMIUM_PRICE_RS}\n"
-                f"**🎁 Benefits:** {PREMIUM_CLONE_LIMIT} Clone Bots + Instant Auto-Approval\n\n"
-                f"Payment ke liye niche button dabayein.\n"
-                f"_(Payment successful hote hi premium auto-activate ho jayega)_",
-                reply_markup=buttons
-            )
-        except Exception as e:
-            logger.error(f"Razorpay Error: {e}")
-            await status_msg.edit_text(f"❌ **Error:** `{e}`")
-            
-        if user_id in user_states:
-            del user_states[user_id]
-
-    # 2. Token Process
-    elif current_step == "WAITING_TOKEN":
-        bot_token = text
-        if not re.match(r'\d[0-9]{8,10}:[0-9A-Za-z_-]{35}', bot_token):
-            return await message.reply_text("❌ **Invalid Token Format!** Sahi token bhejein ya `/cancel` karein.")
-
-        status_msg = await message.reply_text("⏳ **Verifying Bot Token...**")
-
-        try:
-            temp_client = Client(":memory:", api_id=API_ID, api_hash=API_HASH, bot_token=bot_token, in_memory=True)
-            await temp_client.start()
-            bot_info = await temp_client.get_me()
-            await temp_client.stop()
-        except Exception as e:
-            return await status_msg.edit_text(f"❌ **Invalid Token!** `{e}`\nDubara try karein ya `/cancel` karein.")
-
-        user_states[user_id] = {
-            "step": "WAITING_SESSION",
-            "token": bot_token,
-            "bot_username": bot_info.username
-        }
-
-        await status_msg.edit_text(f"✅ **Token Verified!** (Bot: @{bot_info.username})\n\n**Step 2:** Ab apna **String Session** bhejein.\n_(Music ke liye zaroori)_")
-
-    # 3. Session Process
-    elif current_step == "WAITING_SESSION":
-        string_session = text
-        status_msg = await message.reply_text("⏳ **Verifying String Session...**")
-
-        try:
-            temp_user = Client(":memory:", api_id=API_ID, api_hash=API_HASH, session_string=string_session, in_memory=True)
-            await temp_user.start()
-            await temp_user.stop()
-        except Exception as e:
-            return await status_msg.edit_text(f"❌ **Invalid Session!** `{e}`\nDubara try karein ya `/cancel` karein.")
-
-        await status_msg.edit_text("✅ **Session Verified!**\n\n⏳ Starting your bot...")
-
-        data = user_states[user_id]
-        await process_approval(client, user_id, data["token"], string_session, data["bot_username"])
-        
-        if user_id in user_states:
-            del user_states[user_id]
-
-# ═══════════════════════════════════════════════════════════
-# 🔄 CHECK PAYMENT STATUS
-# ═══════════════════════════════════════════════════════════
-@app.on_callback_query(filters.regex(r"^check_pay_"))
-async def check_payment_status(client: Client, query: CallbackQuery):
-    user_id = query.from_user.id
-    is_premium = await premium_users.find_one({"user_id": user_id})
-    
-    if is_premium:
-        await query.message.edit_text("✅ **Payment Successful!**\n\nAap ab Premium hain. `/clone` bhej kar bot banayein.")
-        return await query.answer("Premium Active!", show_alert=True)
-    
-    await query.answer("⚠️ Payment abhi receive nahi hui. Kripya payment complete karein ya 1-2 min wait karein.", show_alert=True)
-
-# ═══════════════════════════════════════════════════════════
-# ⚙️ PROCESS APPROVAL
-# ═══════════════════════════════════════════════════════════
-async def process_approval(client, user_id, bot_token, string_session, bot_username):
-    try:
-        port = random.randint(10000, 20000)
-        env = os.environ.copy()
-        env["BOT_TOKEN"] = bot_token
-        env["STRING_SESSION"] = string_session
-        env["PORT"] = str(port)
-        env["OWNER_ID"] = str(user_id)
-        env["BOT_NAME"] = f"{bot_username} Clone"
-
-        process = subprocess.Popen([sys.executable, "-m", "RHYTHMSYNC"], env=env)
-        active_processes[bot_username] = process
-
-        await cloned_bots.update_one(
-            {"user_id": user_id, "bot_username": bot_username},
-            {"$set": {"token": bot_token, "session": string_session, "bot_username": bot_username, "user_id": user_id, "status": "active", "port": port}},
-            upsert=True
-        )
-
-        msg = f"🎉 **Badhai Ho!**\n\nAapka bot @{bot_username} live ho gaya hai.\nAb us bot me `/start` karein."
-        
-        try:
-            await client.send_message(user_id, msg)
-        except:
-            pass
-        
-        logger.info(f"Started {bot_username} on PORT {port}")
-
-    except Exception as e:
-        logger.error(f"Error: {e}")
-        try:
-            await client.send_message(user_id, f"❌ Error starting bot: `{e}`")
-        except:
-            pass
-
-# ═══════════════════════════════════════════════════════════
-# 👤 USER COMMANDS
-# ═══════════════════════════════════════════════════════════
-@app.on_message(filters.command("mybots") & filters.private)
-async def my_bots(client: Client, message: Message):
-    user_bots = await cloned_bots.find({"user_id": message.from_user.id}).to_list(length=10)
-    if not user_bots:
-        return await message.reply_text("❌ Aapka koi bot nahi hai.")
-    
-    text = "**🤖 Your Bots:**\n\n"
-    for i, bot in enumerate(user_bots, 1):
-        text += f"{i}. @{bot.get('bot_username')}\n"
-    text += "\nDelete: `/delbot <bot_username>`"
-    await message.reply_text(text)
-
-@app.on_message(filters.command("delbot") & filters.private)
-async def delete_bot(client: Client, message: Message):
-    if len(message.command) < 2:
-        return await message.reply_text("**Usage:** `/delbot <bot_username>`")
-    
-    bot_username = message.command[1].replace("@", "")
-    user_bot = await cloned_bots.find_one({"user_id": message.from_user.id, "bot_username": bot_username})
-    
-    if not user_bot:
-        return await message.reply_text("❌ Bot nahi mila.")
-    
-    if bot_username in active_processes:
-        try:
-            active_processes[bot_username].terminate()
-            del active_processes[bot_username]
-        except:
-            pass
-    
-    await cloned_bots.delete_one({"bot_username": bot_username})
-    await message.reply_text(f"✅ Bot @{bot_username} deleted.")
-
-# ═══════════════════════════════════════════════════════════
-# 👑 OWNER COMMANDS
-# ═══════════════════════════════════════════════════════════
-@app.on_message(filters.command("addpremium") & filters.user(OWNER_ID))
-async def add_premium(client: Client, message: Message):
-    if len(message.command) < 2:
-        return await message.reply_text("**Usage:** `/addpremium <user_id>`")
-        
-    try:
-        target_id = int(message.command[1])
-    except ValueError:
-        return await message.reply_text("❌ Invalid ID!")
-    
-    await premium_users.update_one({"user_id": target_id}, {"$set": {"user_id": target_id}}, upsert=True)
-    await message.reply_text(f"✅ User `{target_id}` is now Premium.")
-    try:
-        await client.send_message(target_id, f"🎉 **Aapko Premium mil gaya!**\n\nAb aap {PREMIUM_CLONE_LIMIT} bots bana sakte hain.")
-    except:
-        pass
-
-@app.on_message(filters.command("rempremium") & filters.user(OWNER_ID))
-async def remove_premium(client: Client, message: Message):
-    if len(message.command) < 2:
-        return await message.reply_text("**Usage:** `/rempremium <user_id>`")
-        
-    try:
-        target_id = int(message.command[1])
-    except ValueError:
-        return await message.reply_text("❌ Invalid ID!")
-    
-    await premium_users.delete_one({"user_id": target_id})
-    await message.reply_text(f"❌ User `{target_id}` premium removed.")
-
-@app.on_message(filters.command("premiumstats") & filters.user(OWNER_ID))
-async def premium_stats(client: Client, message: Message):
-    total_premium = await premium_users.count_documents({})
-    total_bots = await cloned_bots.count_documents({})
-    
-    await message.reply_text(
-        f"📊 **Premium Stats**\n\n"
-        f"👑 **Premium Users:** {total_premium}\n"
-        f"🤖 **Total Cloned Bots:** {total_bots}"
-    )
-
-# ═══════════════════════════════════════════════════════════
-# 6. START CLONED BOTS ON RESTART
-# ═══════════════════════════════════════════════════════════
-async def start_cloned_bots():
-    logger.info("[Clone] Checking DB for active bots...")
-    async for bot_data in cloned_bots.find({"status": "active"}):
-        try:
-            port = bot_data.get("port", random.randint(10000, 20000))
-            env = os.environ.copy()
-            env["BOT_TOKEN"] = bot_data["token"]
-            env["STRING_SESSION"] = bot_data["session"]
-            env["PORT"] = str(port)
-            env["OWNER_ID"] = str(bot_data["user_id"])
-
-            process = subprocess.Popen([sys.executable, "-m", "RHYTHMSYNC"], env=env)
-            active_processes[bot_data["bot_username"]] = process
-            logger.info(f"[Clone] Restarted {bot_data['bot_username']}")
-        except Exception as e:
-            logger.error(f"[Clone] Failed: {e}")
+# ... (Baaki clone process, /mybots, /delbot, /addpremium, start_cloned_bots code same rahega) ...
